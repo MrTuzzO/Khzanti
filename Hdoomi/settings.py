@@ -63,6 +63,16 @@ WSGI_APPLICATION = 'Hdoomi.wsgi.application'
 #     }
 # }
 
+import dj_database_url
+
+DATABASES = {
+    "default": dj_database_url.parse(
+        os.getenv("DATABASE_URL"),
+        conn_max_age=600,
+        ssl_require=True,
+    )
+}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -100,3 +110,47 @@ USE_TZ = True
 
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS').split(',')
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
+    "ROTATE_REFRESH_TOKENS": True,
+}
+
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Hdoomi API",
+    "DESCRIPTION": "API documentation for Hdoomi",
+    "VERSION": "1.0.0",
+
+    "CONTACT": {
+        "name": "Khirul Islam",
+        "email": "khirulislam@proton.me"
+    },
+
+    # Separate request and response schemas
+    "COMPONENT_SPLIT_REQUEST": True,
+
+    # Keep JWT token after page refresh
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,
+    },
+
+    # JWT Bearer auth button
+    "SECURITY": [{"BearerAuth": []}],
+    "PATH_PREFIX": "/api/v1",
+
+    "ENUM_NAME_OVERRIDES": {
+        "ShiftStatusEnum": "shift.models.Shift.Status",
+        "ShiftAssignmentStatusEnum": "shift.models.ShiftAssignment.Status",
+        "NurseTypeEnum": "nurses.models.NurseProfile.NurseType",
+    },
+}
