@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'core',
     'accounts',
     'wardrobe',
+    'news',
 ]
 
 MIDDLEWARE = [
@@ -204,6 +205,26 @@ CKEDITOR_5_CONFIGS = {
             "sourceEditing",
         ],
     },
+    "blog": {
+        "toolbar": [
+            "heading", "|",
+            "bold", "italic", "underline", "link", "|",
+            "bulletedList", "numberedList", "blockQuote", "|",
+            "insertImage", "mediaEmbed", "insertTable", "|",
+            "undo", "redo", "|",
+            "sourceEditing",
+        ],
+        "image": {
+            "toolbar": [
+                "imageTextAlternative", "|",
+                "imageStyle:alignLeft", "imageStyle:alignCenter", "imageStyle:alignRight", "imageStyle:side",
+            ],
+            "styles": ["full", "side", "alignLeft", "alignCenter", "alignRight"],
+        },
+        "table": {
+            "contentToolbar": ["tableColumn", "tableRow", "mergeTableCells"],
+        },
+    },
 }
 CKEDITOR_5_FILE_UPLOAD_PERMISSION = "staff"
 
@@ -326,6 +347,19 @@ UNFOLD = {
                         "icon": "checkroom",
                         "link": reverse_lazy("admin:wardrobe_category_changelist"),
                         "permission": _perm("wardrobe.view_category"),
+                    },
+                ],
+            },
+            {
+                "title": _("Style News"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Posts"),
+                        "icon": "article",
+                        "link": reverse_lazy("admin:news_post_changelist"),
+                        "permission": _perm("news.view_post"),
                     },
                 ],
             },
