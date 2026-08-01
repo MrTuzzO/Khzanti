@@ -28,6 +28,7 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=150)
     email = models.EmailField(unique=True)
+    profile_image = models.ImageField(upload_to="profile_images/", null=True, blank=True)
     is_email_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
@@ -41,6 +42,16 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    def get_full_name(self):
+        return self.name
+
+    def get_short_name(self):
+        return self.name
+
+    @property
+    def avatar_url(self):
+        return self.profile_image.url if self.profile_image else None
 
 
 class OTP(models.Model):

@@ -1,0 +1,96 @@
+{% extends "admin/base.html" %}
+{% load i18n unfold %}
+
+{% block title %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+    {% include "unfold/helpers/site_branding.html" %}
+{% endblock %}
+
+{% block content %}
+        <div class="grow flex flex-col gap-6">
+            <div>
+                <h1 class="text-xl font-semibold text-important">
+                    {% blocktranslate with name=request.user.get_full_name|default:request.user.get_username %}Welcome back, {{ name }}{% endblocktranslate %}
+                </h1>
+                <p class="text-subtle text-sm mt-1">{% translate "Here's a summary of your platform's performance" %}</p>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                {% for stat in stats %}
+                    <div class="bg-white border border-base-200 rounded-default shadow-xs p-6 dark:bg-base-900 dark:border-base-800">
+                        <div class="text-subtle text-sm">{{ stat.title }}</div>
+                        <div class="flex items-end justify-between mt-2">
+                            <div class="text-2xl font-semibold text-important">{{ stat.value }}</div>
+                            {% if stat.change is not None %}
+                                <span class="inline-flex items-center gap-0.5 text-xs font-semibold rounded-default px-1.5 h-5 {% if stat.change >= 0 %}bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400{% else %}bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400{% endif %}">
+                                    <span class="material-symbols-outlined text-sm">{% if stat.change >= 0 %}trending_up{% else %}trending_down{% endif %}</span>
+                                    {{ stat.change }}%
+                                </span>
+                            {% endif %}
+                        </div>
+                        <div class="text-subtle text-xs mt-1">{{ stat.caption }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <div>
+                <h2 class="font-semibold text-important text-base mb-3">{% translate "Recent Users" %}</h2>
+
+                <div class="bg-white border border-base-200 rounded-default shadow-xs overflow-hidden dark:bg-base-900 dark:border-base-800">
+                    <div class="overflow-x-auto scrollbar-default">
+                        <table class="border-spacing-none border-separate w-full">
+                            <thead>
+                                <tr class="bg-base-50 dark:bg-white/[.02]">
+                                    <th class="align-middle border-b border-base-200 font-semibold py-2 px-3 text-left dark:border-base-800">{% translate "User" %}</th>
+                                    <th class="align-middle border-b border-base-200 font-semibold py-2 px-3 text-left dark:border-base-800">{% translate "Email" %}</th>
+                                    <th class="align-middle border-b border-base-200 font-semibold py-2 px-3 text-left dark:border-base-800">{% translate "Joined" %}</th>
+                                    <th class="align-middle border-b border-base-200 font-semibold py-2 px-3 text-left dark:border-base-800">{% translate "Status" %}</th>
+                                    <th class="align-middle border-b border-base-200 font-semibold py-2 px-3 text-right dark:border-base-800">{% translate "Action" %}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for recent_user in recent_users %}
+                                    {% url 'admin:accounts_user_change' recent_user.pk as user_change_url %}
+                                    <tr class="border-t border-base-200 hover:bg-base-50 dark:border-base-800 dark:hover:bg-white/[.02]">
+                                        <td class="px-3 py-2 align-middle">
+                                            <a href="{{ user_change_url }}" class="flex items-center gap-3">
+                                                {% include "unfold/helpers/avatar.html" with user=recent_user circle=1 size="sm" %}
+                                                <div class="min-w-0">
+                                                    <div class="font-semibold text-important truncate">{{ recent_user.name }}</div>
+                                                </div>
+                                            </a>
+                                        </td>
+                                        <td class="px-3 py-2 align-middle text-subtle">
+                                            <a href="{{ user_change_url }}" class="block">{{ recent_user.email }}</a>
+                                        </td>
+                                        <td class="px-3 py-2 align-middle text-subtle">
+                                            <a href="{{ user_change_url }}" class="block">{{ recent_user.created_at|date:"d M Y" }}</a>
+                                        </td>
+                                        <td class="px-3 py-2 align-middle">
+                                            <a href="{{ user_change_url }}" class="inline-block">
+                                                {% if recent_user.is_email_verified %}
+                                                    {% component "unfold/helpers/label.html" with variant="success" text=_("Verified") %}{% endcomponent %}
+                                                {% else %}
+                                                    {% component "unfold/helpers/label.html" with variant="warning" text=_("Unverified") %}{% endcomponent %}
+                                                {% endif %}
+                                            </a>
+                                        </td>
+                                        <td class="px-3 py-2 align-middle text-right">
+                                            <a href="{% url 'admin:accounts_user_delete' recent_user.pk %}" class="text-subtle hover:text-red-600 inline-flex">
+                                                <span class="material-symbols-outlined text-lg">delete</span>
+                                            </a>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="px-3 py-6 text-center text-subtle">{% translate "No users yet" %}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+{% endblock %}

@@ -16,6 +16,8 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 # Application definition
 
 INSTALLED_APPS = [
+    'unfold',
+    'unfold.contrib.filters',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -50,7 +52,7 @@ ROOT_URLCONF = 'Hdoomi.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -179,8 +181,8 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Hdoomi API",
-    "DESCRIPTION": "API documentation for Hdoomi",
+    "TITLE": "Hdoom-i API",
+    "DESCRIPTION": "API documentation for Hdoom-i",
     "VERSION": "1.0.0",
 
     "CONTACT": {
@@ -204,5 +206,94 @@ SPECTACULAR_SETTINGS = {
         "ShiftStatusEnum": "shift.models.Shift.Status",
         "ShiftAssignmentStatusEnum": "shift.models.ShiftAssignment.Status",
         "NurseTypeEnum": "nurses.models.NurseProfile.NurseType",
+    },
+}
+
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
+
+
+def _perm(codename):
+    return lambda request: request.user.has_perm(codename)
+
+
+UNFOLD = {
+    "SITE_TITLE": "Hdoom-i Admin",
+    "SITE_HEADER": "Hdoom-i",
+    "SITE_SYMBOL": "shield_person",
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": True,
+    "BORDER_RADIUS": "8px",
+    "DASHBOARD_CALLBACK": "accounts.dashboard.dashboard_callback",
+    "COLORS": {
+        "primary": {
+            "50": "oklch(97.7% 0.004 155.276)",
+            "100": "oklch(94.6% 0.010 155.276)",
+            "200": "oklch(90.2% 0.019 155.276)",
+            "300": "oklch(82.7% 0.036 155.276)",
+            "400": "oklch(71.4% 0.062 155.276)",
+            "500": "oklch(62.7% 0.081 155.276)",
+            "600": "oklch(55.8% 0.088 155.276)",
+            "700": "oklch(49.6% 0.081 155.276)",
+            "800": "oklch(43.8% 0.067 155.276)",
+            "900": "oklch(38.1% 0.054 155.276)",
+            "950": "oklch(29.1% 0.046 155.276)",
+        },
+    },
+    "SIDEBAR": {
+        "show_search": True,
+        "show_all_applications": False,
+        "navigation": [
+            {
+                "title": _("Navigation"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Dashboard"),
+                        "icon": "space_dashboard",
+                        "link": reverse_lazy("admin:index"),
+                    },
+                ],
+            },
+            {
+                "title": _("Accounts"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Users"),
+                        "icon": "person",
+                        "link": reverse_lazy("admin:accounts_user_changelist"),
+                        "permission": _perm("accounts.view_user"),
+                    },
+                    {
+                        "title": _("OTP Codes"),
+                        "icon": "pin",
+                        "link": reverse_lazy("admin:accounts_otp_changelist"),
+                        "permission": _perm("accounts.view_otp"),
+                    },
+                    {
+                        "title": _("Password Reset Tokens"),
+                        "icon": "key",
+                        "link": reverse_lazy("admin:accounts_passwordresettoken_changelist"),
+                        "permission": _perm("accounts.view_passwordresettoken"),
+                    },
+                ],
+            },
+            {
+                "title": _("Authentication"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Groups"),
+                        "icon": "group",
+                        "link": reverse_lazy("admin:auth_group_changelist"),
+                        "permission": _perm("auth.view_group"),
+                    },
+                ],
+            },
+        ],
     },
 }

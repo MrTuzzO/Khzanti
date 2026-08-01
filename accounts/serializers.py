@@ -11,7 +11,7 @@ from .utils import send_otp_email
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "name", "email", "is_email_verified", "created_at")
+        fields = ("id", "name", "email", "avatar_url", "is_email_verified", "created_at")
         read_only_fields = fields
 
 
