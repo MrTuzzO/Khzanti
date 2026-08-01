@@ -30,6 +30,8 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'cloudinary_storage',
     'cloudinary',
+    'solo',
+    'django_ckeditor_5',
     'core',
     'accounts',
 ]
@@ -179,6 +181,29 @@ EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
+# Cache (used to cache the SiteSettings singleton — cleared automatically on every save)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+}
+
+SOLO_CACHE = "default"
+SOLO_CACHE_TIMEOUT = 60 * 60 * 24  # 1 day; refreshed immediately whenever SiteSettings is saved
+
+CKEDITOR_5_CONFIGS = {
+    "default": {
+        "toolbar": [
+            "heading", "|",
+            "bold", "italic", "underline", "link", "|",
+            "bulletedList", "numberedList", "blockQuote", "|",
+            "undo", "redo", "|",
+            "sourceEditing",
+        ],
+    },
+}
+CKEDITOR_5_FILE_UPLOAD_PERMISSION = "staff"
+
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Hdoom-i API",
@@ -253,6 +278,12 @@ UNFOLD = {
                         "title": _("Dashboard"),
                         "icon": "space_dashboard",
                         "link": reverse_lazy("admin:index"),
+                    },
+                    {
+                        "title": _("Settings"),
+                        "icon": "settings",
+                        "link": reverse_lazy("admin:core_sitesettings_change"),
+                        "permission": _perm("core.view_sitesettings"),
                     },
                 ],
             },
