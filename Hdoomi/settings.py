@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'django_ckeditor_5',
     'core',
     'accounts',
+    'wardrobe',
 ]
 
 MIDDLEWARE = [
@@ -119,6 +120,8 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"]
+SITE_LOGO_URL = f"/{STATIC_URL}img/Logo.png"
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -245,6 +248,7 @@ def _perm(codename):
 UNFOLD = {
     "SITE_TITLE": "Hdoom-i Admin",
     "SITE_HEADER": "Hdoom-i",
+    "SITE_LOGO": SITE_LOGO_URL,
     "SITE_SYMBOL": "shield_person",
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": True,
@@ -309,6 +313,19 @@ UNFOLD = {
                         "icon": "key",
                         "link": reverse_lazy("admin:accounts_passwordresettoken_changelist"),
                         "permission": _perm("accounts.view_passwordresettoken"),
+                    },
+                ],
+            },
+            {
+                "title": _("Wardrobe"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Categories"),
+                        "icon": "checkroom",
+                        "link": reverse_lazy("admin:wardrobe_category_changelist"),
+                        "permission": _perm("wardrobe.view_category"),
                     },
                 ],
             },
