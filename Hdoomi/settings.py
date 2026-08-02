@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'accounts',
     'wardrobe',
     'news',
+    'avatars',
 ]
 
 MIDDLEWARE = [
@@ -305,23 +306,56 @@ UNFOLD = {
                         "link": reverse_lazy("admin:index"),
                     },
                     {
+                        "title": _("Settings"),
+                        "icon": "settings",
+                        "link": reverse_lazy("admin:core_sitesettings_change"),
+                        "permission": _perm("core.view_sitesettings"),
+                    },
+                ],
+            },
+            {
+                "title": _("Accounts"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
                         "title": _("Users"),
                         "icon": "person",
                         "link": reverse_lazy("admin:accounts_user_changelist"),
                         "permission": _perm("accounts.view_user"),
                     },
                     {
+                        "title": _("OTP Codes"),
+                        "icon": "pin",
+                        "link": reverse_lazy("admin:accounts_otp_changelist"),
+                        "permission": _perm("accounts.view_otp"),
+                    },
+                    {
+                        "title": _("Password Reset Tokens"),
+                        "icon": "key",
+                        "link": reverse_lazy("admin:accounts_passwordresettoken_changelist"),
+                        "permission": _perm("accounts.view_passwordresettoken"),
+                    },
+                ],
+            },
+            {
+                "title": _("Wardrobe"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
                         "title": _("Categories"),
                         "icon": "checkroom",
                         "link": reverse_lazy("admin:wardrobe_category_changelist"),
                         "permission": _perm("wardrobe.view_category"),
                     },
-                    {
-                        "title": _("Settings"),
-                        "icon": "settings",
-                        "link": reverse_lazy("admin:core_sitesettings_change"),
-                        "permission": _perm("core.view_sitesettings"),
-                    },
+                ],
+            },
+            {
+                "title": _("Style News"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
                     {
                         "title": _("Posts"),
                         "icon": "article",
@@ -340,18 +374,6 @@ UNFOLD = {
                         "icon": "group",
                         "link": reverse_lazy("admin:auth_group_changelist"),
                         "permission": _perm("auth.view_group"),
-                    },
-                    {
-                        "title": _("OTP Codes"),
-                        "icon": "pin",
-                        "link": reverse_lazy("admin:accounts_otp_changelist"),
-                        "permission": _perm("accounts.view_otp"),
-                    },
-                    {
-                        "title": _("Password Reset Tokens"),
-                        "icon": "key",
-                        "link": reverse_lazy("admin:accounts_passwordresettoken_changelist"),
-                        "permission": _perm("accounts.view_passwordresettoken"),
                     },
                 ],
             },
