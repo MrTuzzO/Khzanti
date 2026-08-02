@@ -30,6 +30,7 @@ class Avatar(models.Model):
         blank=True,
     )
     error_message = models.TextField(blank=True)
+    internal_error_detail = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
