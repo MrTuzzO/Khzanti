@@ -8,4 +8,4 @@ from .models import Avatar
 class AvatarAdmin(ModelAdmin):
     list_display = ("id", "user", "status", "created_at", "updated_at")
     list_filter = ("status",)
-    readonly_fields = ("fal_request_id", "created_at", "updated_at")
+    readonly_fields = ("fal_request_id", "internal_error_detail", "created_at", "updated_at")
