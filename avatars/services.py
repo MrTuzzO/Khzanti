@@ -1,7 +1,10 @@
+import logging
 import fal_client
 import requests
 from django.core.files.base import ContentFile
 from .models import Avatar
+
+logger = logging.getLogger(__name__)
 
 AVATAR_STYLE_PROMPT = (
     "Keep the exact same facial features as image 1 — same eyes, nose shape, "
@@ -14,11 +17,22 @@ AVATAR_STYLE_PROMPT = (
 FAL_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 
+def _friendly_error_message(raw_error: str) -> str:
+    err_lower = (raw_error or "").lower()
+    if any(kw in err_lower for kw in ("balance", "locked", "billing", "credit")):
+        return "The avatar generation service is currently unavailable. Please try again later."
+    if any(kw in err_lower for kw in ("safety", "policy", "content", "nsfw")):
+        return "The source photo could not be processed. Please try uploading a different photo."
+    if "timeout" in err_lower:
+        return "The request timed out while generating your avatar. Please try again."
+    return "Failed to generate avatar. Please try again later."
+
+
 def submit_avatar_job(avatar: Avatar) -> None:
     """
     Submits an avatar generation job to fal.ai.
     Saves the request ID and updates status to 'processing'.
-    On submission failure, updates status to 'failed' with error details.
+    On submission failure, updates status to 'failed' with friendly error details.
     """
     try:
         selfie_url = avatar.source_photo.url
@@ -35,9 +49,12 @@ def submit_avatar_job(avatar: Avatar) -> None:
         avatar.status = Avatar.JobStatus.PROCESSING
         avatar.save(update_fields=["fal_request_id", "status", "updated_at"])
     except Exception as exc:
+        raw_error = str(exc)
+        logger.error("Avatar job %s submission failed: %s", avatar.id, raw_error, exc_info=True)
         avatar.status = Avatar.JobStatus.FAILED
-        avatar.error_message = str(exc)[:500]
-        avatar.save(update_fields=["status", "error_message", "updated_at"])
+        avatar.internal_error_detail = raw_error
+        avatar.error_message = _friendly_error_message(raw_error)
+        avatar.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
 
 
 def sync_avatar_status(avatar: Avatar) -> Avatar:
@@ -84,10 +101,14 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
             avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
             avatar.status = Avatar.JobStatus.DONE
             avatar.error_message = ""
+            avatar.internal_error_detail = ""
             avatar.save()
     except Exception as exc:
+        raw_error = str(exc)
+        logger.error("Avatar job %s status sync failed: %s", avatar.id, raw_error, exc_info=True)
         avatar.status = Avatar.JobStatus.FAILED
-        avatar.error_message = str(exc)[:500]
-        avatar.save()
+        avatar.internal_error_detail = raw_error
+        avatar.error_message = _friendly_error_message(raw_error)
+        avatar.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
 
     return avatar
