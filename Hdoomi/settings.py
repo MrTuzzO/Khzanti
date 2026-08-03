@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'wardrobe',
     'news',
     'avatars',
+    'wardrobe_items_ai',
 ]
 
 MIDDLEWARE = [
