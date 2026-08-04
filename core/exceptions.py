@@ -1,19 +1,41 @@
+from django.conf import settings
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.views import exception_handler
-from rest_framework.exceptions import ValidationError
+
+
+class ServiceError(APIException):
+    """
+    Base exception for handled external service & pipeline failures.
+    - `detail`: Safe, user-facing error message (returned in production & dev).
+    - `debug_detail`: Technical/raw error detail (included ONLY when settings.DEBUG is True).
+    """
+    def __init__(self, detail=None, debug_detail=None, status_code=502):
+        if status_code is not None:
+            self.status_code = status_code
+        self.debug_detail = debug_detail
+        super().__init__(detail)
 
 
 def custom_exception_handler(exc, context):
     response = exception_handler(exc, context)
 
     if response is not None:
-        response.data = {
+        payload = {
             "status": "error",
             "code": response.status_code,
             "message": _extract_message(exc, response.data),
             "data": getattr(exc, "response_data", None),
         }
 
+        if getattr(settings, "DEBUG", False):
+            debug_detail = getattr(exc, "debug_detail", None)
+            if debug_detail:
+                payload["debug_detail"] = str(debug_detail)
+
+        response.data = payload
+
     return response
+
 
 
 def _extract_message(exc, data):
