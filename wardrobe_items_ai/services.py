@@ -8,8 +8,9 @@ from .models import ItemAnalysis
 
 logger = logging.getLogger(__name__)
 
-FAL_BG_REMOVAL_MODEL_ID = "fal-ai/pixelcut/background-removal"
+FAL_BG_REMOVAL_MODEL_ID = "fal-ai/birefnet"
 FAL_VISION_MODEL_ID = "nvidia/nemotron-3-nano-omni/vision"
+
 
 
 def _friendly_error_message(raw_error: str) -> str:
@@ -172,9 +173,7 @@ def submit_analysis_job(analysis: ItemAnalysis) -> ItemAnalysis:
 
 def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     """
-    Checks or executes status update for the given analysis instance.
+    Returns the analysis instance as-is (read-only status check).
     """
-    if analysis.status in (ItemAnalysis.JobStatus.DONE, ItemAnalysis.JobStatus.FAILED):
-        return analysis
-    process_item(analysis)
     return analysis
+
