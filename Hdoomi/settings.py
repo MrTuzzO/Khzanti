@@ -70,7 +70,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'Hdoomi.wsgi.application'
+ASGI_APPLICATION = 'Hdoomi.asgi.application'
 
 
 # Database
