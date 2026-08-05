@@ -12,6 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import OTP, PasswordResetToken, User
 from .serializers import (
+    DeleteAccountSerializer,
     ForgotPasswordSerializer,
     LoginSerializer,
     RegisterSerializer,
@@ -200,5 +201,21 @@ class ResetPasswordView(APIView):
 
         return Response(
             {"detail": "Password reset successfully. You can now log in."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class DeleteAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=DeleteAccountSerializer, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request):
+        serializer = DeleteAccountSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        request.user.delete()
+
+        return Response(
+            {"detail": "Your account has been permanently deleted."},
             status=status.HTTP_200_OK,
         )
