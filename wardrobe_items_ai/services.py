@@ -1,16 +1,77 @@
+import base64
+import hashlib
 import json
 import logging
 import re
-import fal_client
-import requests
+import time
+from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.core.files.base import ContentFile
-from .models import ItemAnalysis
+import fal_client
+from nacl.encoding import HexEncoder
+from nacl.exceptions import BadSignatureError
+from nacl.signing import VerifyKey
+import requests
+from .models import ItemAnalysis, JobStatus
 
 logger = logging.getLogger(__name__)
 
 FAL_BG_REMOVAL_MODEL_ID = "fal-ai/birefnet"
 FAL_VISION_MODEL_ID = "nvidia/nemotron-3-nano-omni/vision"
 
+JWKS_URL = "https://rest.fal.ai/.well-known/jwks.json"
+JWKS_CACHE_DURATION = 24 * 60 * 60
+_jwks_cache = None
+_jwks_cache_time = 0
+
+
+def fetch_jwks() -> list:
+    global _jwks_cache, _jwks_cache_time
+    current_time = time.time()
+    if _jwks_cache is None or (current_time - _jwks_cache_time) > JWKS_CACHE_DURATION:
+        response = requests.get(JWKS_URL, timeout=10)
+        response.raise_for_status()
+        _jwks_cache = response.json().get("keys", [])
+        _jwks_cache_time = current_time
+    return _jwks_cache
+
+
+def verify_webhook_signature(
+    request_id: str,
+    user_id: str,
+    timestamp: str,
+    signature_hex: str,
+    body: bytes,
+) -> bool:
+    try:
+        timestamp_int = int(timestamp)
+        if abs(int(time.time()) - timestamp_int) > 300:
+            return False
+    except (ValueError, TypeError):
+        return False
+    message_to_verify = "\n".join([
+        request_id or "",
+        user_id or "",
+        timestamp or "",
+        hashlib.sha256(body or b"").hexdigest(),
+    ]).encode("utf-8")
+    try:
+        signature_bytes = bytes.fromhex(signature_hex)
+    except (ValueError, TypeError):
+        return False
+    try:
+        public_keys_info = fetch_jwks()
+    except Exception:
+        return False
+    for key_info in public_keys_info:
+        try:
+            public_key_bytes = base64.urlsafe_b64decode(key_info["x"])
+            verify_key = VerifyKey(public_key_bytes.hex(), encoder=HexEncoder)
+            verify_key.verify(message_to_verify, signature_bytes)
+            return True
+        except (BadSignatureError, Exception):
+            continue
+    return False
 
 
 def _friendly_error_message(raw_error: str) -> str:
@@ -41,134 +102,98 @@ def _parse_json_response(output_text: str) -> dict:
         return {}
 
 
-def process_item(analysis: ItemAnalysis) -> None:
+async def submit_bg_removal_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
     """
-    Two-step pipeline for wardrobe item analysis:
-    1. Background removal via fal.ai pixelcut model.
-    2. Vision model extraction (color, description, category consistency check).
+    Kicks off Step 1 (Background removal) via fal.ai submit_async with webhook_url.
+    Updates ItemAnalysis status to PROCESSING or FAILED immediately on error.
     """
-    analysis.status = ItemAnalysis.JobStatus.PROCESSING
-    analysis.save(update_fields=["status", "updated_at"])
-
-    wardrobe_item = analysis.wardrobe_item
-    source_photo_url = getattr(wardrobe_item, "image", None)
+    wardrobe_item_obj = await sync_to_async(lambda: analysis.wardrobe_item)()
+    source_photo_url = getattr(wardrobe_item_obj, "image", None)
     if hasattr(source_photo_url, "url"):
         source_photo_url = source_photo_url.url
     else:
         source_photo_url = str(source_photo_url or "")
 
     if not source_photo_url:
-        analysis.status = ItemAnalysis.JobStatus.FAILED
+        analysis.status = JobStatus.FAILED
         analysis.internal_error_detail = "Wardrobe item has no image URL."
         analysis.error_message = "Item image is missing. Please re-upload your item photo."
-        analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
-        return
+        await analysis.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+        return analysis
 
-    # Step 1: Background removal
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
+    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/bg-removal/"
+
     try:
-        handle = fal_client.submit(
+        handle = await sync_to_async(fal_client.submit)(
             FAL_BG_REMOVAL_MODEL_ID,
             arguments={"image_url": source_photo_url},
+            webhook_url=webhook_url,
         )
         analysis.fal_request_id_bg_removal = handle.request_id
-        analysis.save(update_fields=["fal_request_id_bg_removal", "updated_at"])
-
-        res = handle.get()
-        image_url = None
-        if isinstance(res, dict):
-            if res.get("image") and isinstance(res["image"], dict):
-                image_url = res["image"].get("url")
-            elif res.get("image") and isinstance(res["image"], str):
-                image_url = res["image"]
-            elif res.get("images") and isinstance(res["images"], list) and len(res["images"]) > 0:
-                first_img = res["images"][0]
-                image_url = first_img.get("url") if isinstance(first_img, dict) else first_img
-
-        if not image_url:
-            raise Exception(f"No image URL returned from background removal: {res}")
-
-        img_resp = requests.get(image_url, timeout=30)
-        img_resp.raise_for_status()
-
-        filename = f"processed_item_{wardrobe_item.pk}.png"
-        analysis.processed_image.save(filename, ContentFile(img_resp.content), save=False)
-        analysis.save(update_fields=["processed_image", "updated_at"])
-    except Exception as exc:
-        raw_error = str(exc)
-        logger.error("Background removal failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
-        analysis.status = ItemAnalysis.JobStatus.FAILED
-        analysis.internal_error_detail = raw_error
-        analysis.error_message = _friendly_error_message(raw_error)
-        analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
-        return
-
-    # Step 2: Vision Model & Category Consistency Check
-    try:
-        processed_url = analysis.processed_image.url if analysis.processed_image else ""
-        category_obj = getattr(wardrobe_item, "category", None)
-        category_name = (
-            getattr(category_obj, "name", str(category_obj))
-            if category_obj
-            else "clothing item"
-        )
-
-        prompt = (
-            f"Analyze this image of a clothing or wardrobe item.\n"
-            f"1. Check if the image displays an item matching the category '{category_name}'. Set 'matches_category' to true if yes, false if it is a completely different object or wrong category.\n"
-            f"2. Extract the primary dominant color of the item.\n"
-            f"3. Provide a short 1-2 sentence description of the item's visual style and key features.\n"
-            f"Respond ONLY with a JSON object containing keys: 'matches_category' (boolean), 'color' (string), 'description' (string)."
-        )
-
-        handle_vision = fal_client.submit(
-            FAL_VISION_MODEL_ID,
-            arguments={
-                "image_url": processed_url,
-                "prompt": prompt,
-            },
-        )
-        analysis.fal_request_id_vision = handle_vision.request_id
-        analysis.save(update_fields=["fal_request_id_vision", "updated_at"])
-
-        vision_res = handle_vision.get()
-        raw_output = ""
-        if isinstance(vision_res, dict):
-            raw_output = vision_res.get("output") or vision_res.get("text") or vision_res.get("content") or str(vision_res)
-        else:
-            raw_output = str(vision_res)
-
-        parsed = _parse_json_response(raw_output)
-
-        matches_category = parsed.get("matches_category", True)
-        if not matches_category:
-            friendly_msg = f"We couldn't find a clear {category_name} in this photo — please upload a photo showing just the item."
-            analysis.status = ItemAnalysis.JobStatus.FAILED
-            analysis.internal_error_detail = f"Category mismatch: vision model reported image does not match category '{category_name}'."
-            analysis.error_message = friendly_msg
-            analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
-            return
-
-        analysis.color = parsed.get("color", "").strip()
-        analysis.description = parsed.get("description", "").strip()
-        analysis.status = ItemAnalysis.JobStatus.DONE
+        analysis.status = JobStatus.PROCESSING
         analysis.error_message = ""
         analysis.internal_error_detail = ""
-        analysis.save()
+        await analysis.asave(update_fields=["fal_request_id_bg_removal", "status", "error_message", "internal_error_detail", "updated_at"])
     except Exception as exc:
         raw_error = str(exc)
-        logger.error("Vision extraction failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
-        analysis.status = ItemAnalysis.JobStatus.FAILED
+        logger.error("Background removal submission failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
+        analysis.status = JobStatus.FAILED
         analysis.internal_error_detail = raw_error
         analysis.error_message = _friendly_error_message(raw_error)
-        analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+        await analysis.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
+    return analysis
+
+
+async def submit_vision_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
+    """
+    Kicks off Step 2 (Vision Model & Category Consistency Check) via fal.ai submit_async.
+    """
+    wardrobe_item_obj = await sync_to_async(lambda: analysis.wardrobe_item)()
+    category_obj = await sync_to_async(lambda: getattr(wardrobe_item_obj, "category", None))()
+    category_name = getattr(category_obj, "name", "clothing item") if category_obj else "clothing item"
+
+    prompt = (
+        f"Analyze this image of a clothing or wardrobe item.\n"
+        f"1. Check if the image displays an item matching the category '{category_name}'. Set 'matches_category' to true if yes, false if it is a completely different object or wrong category.\n"
+        f"2. Extract the primary dominant color of the item.\n"
+        f"3. Provide a short 1-2 sentence description of the item's visual style and key features.\n"
+        f"Respond ONLY with a JSON object containing keys: 'matches_category' (boolean), 'color' (string), 'description' (string)."
+    )
+
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
+    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/vision/"
+
+    try:
+        handle = await sync_to_async(fal_client.submit)(
+            FAL_VISION_MODEL_ID,
+            arguments={
+                "image_url": analysis.fal_cdn_url,
+                "prompt": prompt,
+            },
+            webhook_url=webhook_url,
+        )
+        analysis.fal_request_id_vision = handle.request_id
+        analysis.status = JobStatus.PROCESSING
+        await analysis.asave(update_fields=["fal_request_id_vision", "status", "updated_at"])
+    except Exception as exc:
+        raw_error = str(exc)
+        logger.error("Vision submission failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
+        analysis.status = JobStatus.FAILED
+        analysis.internal_error_detail = raw_error
+        analysis.error_message = _friendly_error_message(raw_error)
+        await analysis.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
+    return analysis
 
 
 def submit_analysis_job(analysis: ItemAnalysis) -> ItemAnalysis:
     """
-    Submits and executes analysis for the given ItemAnalysis instance.
+    Sync wrapper around submit_bg_removal_job_async for synchronous code locations.
     """
-    process_item(analysis)
-    return analysis
+    from asgiref.sync import async_to_sync
+    return async_to_sync(submit_bg_removal_job_async)(analysis)
 
 
 def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
@@ -176,4 +201,3 @@ def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     Returns the analysis instance as-is (read-only status check).
     """
     return analysis
-
