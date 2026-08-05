@@ -12,6 +12,9 @@ DEBUG = os.getenv('DEBUG') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
+
+
 
 # Application definition
 
