@@ -12,12 +12,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import OTP, PasswordResetToken, User
 from .serializers import (
+    ChangePasswordSerializer,
     DeleteAccountSerializer,
     ForgotPasswordSerializer,
     LoginSerializer,
     RegisterSerializer,
     ResendOTPSerializer,
     ResetPasswordSerializer,
+    UpdateProfileSerializer,
     UserSerializer,
     VerifyEmailSerializer,
     VerifyResetOTPSerializer,
@@ -217,5 +219,39 @@ class DeleteAccountView(APIView):
 
         return Response(
             {"detail": "Your account has been permanently deleted."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: UserSerializer})
+    def get(self, request):
+        return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+    @extend_schema(request=UpdateProfileSerializer, responses={200: UserSerializer})
+    def patch(self, request):
+        serializer = UpdateProfileSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=ChangePasswordSerializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password"])
+
+        return Response(
+            {"detail": "Password changed successfully."},
             status=status.HTTP_200_OK,
         )
