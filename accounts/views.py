@@ -209,7 +209,7 @@ class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(request=DeleteAccountSerializer, responses={200: OpenApiTypes.OBJECT})
-    def delete(self, request):
+    def post(self, request):
         serializer = DeleteAccountSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
