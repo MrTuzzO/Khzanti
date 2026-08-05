@@ -63,6 +63,7 @@ class ItemAnalysis(models.Model):
         null=True,
         blank=True,
     )
+    fal_cdn_url = models.URLField(max_length=1024, blank=True)
     color = models.CharField(max_length=100, blank=True)
     description = models.TextField(blank=True)
     fal_request_id_bg_removal = models.CharField(max_length=100, blank=True)
@@ -76,5 +77,15 @@ class ItemAnalysis(models.Model):
         verbose_name = "Item Analysis"
         verbose_name_plural = "Item Analyses"
 
+    @property
+    def display_url(self) -> str:
+        if self.processed_image:
+            try:
+                return self.processed_image.url
+            except Exception:
+                pass
+        return self.fal_cdn_url or ""
+
     def __str__(self):
         return f"Analysis {self.pk} - {self.wardrobe_item}"
+
