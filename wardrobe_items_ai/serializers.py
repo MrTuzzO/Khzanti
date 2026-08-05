@@ -1,9 +1,11 @@
+from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 from wardrobe.models import Category
 from wardrobe.serializers import CategorySerializer
 from .models import ItemAnalysis, WardrobeItem
 
 
+@extend_schema_field(OpenApiTypes.STR)
 class CategorySlugOrPKRelatedField(serializers.RelatedField):
     def get_queryset(self):
         return Category.objects.all()
@@ -52,12 +54,16 @@ class WardrobeItemCreateSerializer(serializers.ModelSerializer):
 
 
 class ItemAnalysisSerializer(serializers.ModelSerializer):
+    display_url = serializers.ReadOnlyField()
+
     class Meta:
         model = ItemAnalysis
         fields = [
             "id",
             "wardrobe_item",
             "status",
+            "display_url",
+            "fal_cdn_url",
             "processed_image",
             "color",
             "description",
@@ -66,6 +72,7 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
 
 
 class WardrobeItemSerializer(serializers.ModelSerializer):
