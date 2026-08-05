@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+
 load_dotenv()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,7 +15,6 @@ DEBUG = os.getenv('DEBUG') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
-
 
 
 # Application definition
@@ -41,6 +42,7 @@ INSTALLED_APPS = [
     'news',
     'avatars',
     'wardrobe_items_ai',
+    'django_cleanup.apps.CleanupConfig',
 ]
 
 MIDDLEWARE = [
@@ -123,7 +125,6 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
@@ -148,6 +149,7 @@ STORAGES = {
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS').split(',')
+
 
 from datetime import timedelta
 
@@ -176,21 +178,30 @@ REST_FRAMEWORK = {
     },
 }
 
+
 # OTP / password reset
+
 OTP_EXPIRY_MINUTES = 10
 OTP_MAX_ATTEMPTS = 5
 PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 10
 
+
 # Email
+
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@hdoomi.com")
-EMAIL_BACKEND =  os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend"
+)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
+
 # Cache (used to cache the SiteSettings singleton — cleared automatically on every save)
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -199,6 +210,7 @@ CACHES = {
 
 SOLO_CACHE = "default"
 SOLO_CACHE_TIMEOUT = 60 * 60 * 24  # 1 day; refreshed immediately whenever SiteSettings is saved
+
 
 CKEDITOR_5_CONFIGS = {
     "default": {
@@ -222,15 +234,29 @@ CKEDITOR_5_CONFIGS = {
         "image": {
             "toolbar": [
                 "imageTextAlternative", "|",
-                "imageStyle:alignLeft", "imageStyle:alignCenter", "imageStyle:alignRight", "imageStyle:side",
+                "imageStyle:alignLeft",
+                "imageStyle:alignCenter",
+                "imageStyle:alignRight",
+                "imageStyle:side",
             ],
-            "styles": ["full", "side", "alignLeft", "alignCenter", "alignRight"],
+            "styles": [
+                "full",
+                "side",
+                "alignLeft",
+                "alignCenter",
+                "alignRight",
+            ],
         },
         "table": {
-            "contentToolbar": ["tableColumn", "tableRow", "mergeTableCells"],
+            "contentToolbar": [
+                "tableColumn",
+                "tableRow",
+                "mergeTableCells",
+            ],
         },
     },
 }
+
 CKEDITOR_5_FILE_UPLOAD_PERMISSION = "staff"
 
 
@@ -262,6 +288,7 @@ SPECTACULAR_SETTINGS = {
         "NurseTypeEnum": "nurses.models.NurseProfile.NurseType",
     },
 }
+
 
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -337,8 +364,12 @@ UNFOLD = {
                     {
                         "title": _("Password Reset Tokens"),
                         "icon": "key",
-                        "link": reverse_lazy("admin:accounts_passwordresettoken_changelist"),
-                        "permission": _perm("accounts.view_passwordresettoken"),
+                        "link": reverse_lazy(
+                            "admin:accounts_passwordresettoken_changelist"
+                        ),
+                        "permission": _perm(
+                            "accounts.view_passwordresettoken"
+                        ),
                     },
                 ],
             },
@@ -350,7 +381,9 @@ UNFOLD = {
                     {
                         "title": _("Categories"),
                         "icon": "checkroom",
-                        "link": reverse_lazy("admin:wardrobe_category_changelist"),
+                        "link": reverse_lazy(
+                            "admin:wardrobe_category_changelist"
+                        ),
                         "permission": _perm("wardrobe.view_category"),
                     },
                 ],
