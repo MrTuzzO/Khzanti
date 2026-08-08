@@ -15,7 +15,6 @@ from core.exceptions import ServiceError
 from .models import ItemAnalysis, WardrobeItem
 from .serializers import (
     ItemAnalysisSerializer,
-    ItemAnalysisTriggerSerializer,
     WardrobeItemCreateSerializer,
     WardrobeItemSerializer,
 )
@@ -116,6 +115,8 @@ class WardrobeItemListCreateView(generics.ListCreateAPIView):
         async_to_sync(submit_bg_removal_job_async)(analysis)
 
         fresh_item = WardrobeItem.objects.select_related("category", "analysis").get(pk=item.pk)
+        if hasattr(fresh_item, "analysis"):
+            _raise_if_analysis_failed(fresh_item.analysis)
 
         headers = self.get_success_headers(serializer.data)
         read_serializer = WardrobeItemSerializer(fresh_item, context=self.get_serializer_context())
@@ -129,59 +130,14 @@ class WardrobeItemDetailView(generics.RetrieveDestroyAPIView):
     def get_queryset(self):
         return WardrobeItem.objects.filter(user=self.request.user)
 
-
-class ItemAnalysisTriggerView(AsyncAPIView):
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(
-        request=ItemAnalysisTriggerSerializer,
-        responses={
-            200: ItemAnalysisSerializer,
-            201: ItemAnalysisSerializer,
-        },
-    )
-    async def post(self, request, *args, **kwargs):
-        input_serializer = ItemAnalysisTriggerSerializer(data=request.data)
-        if not input_serializer.is_valid():
-            return Response(
-                input_serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        wardrobe_item_id = input_serializer.validated_data["wardrobe_item_id"]
-
-        try:
-            item = await WardrobeItem.objects.select_related("user").aget(pk=wardrobe_item_id)
-        except (WardrobeItem.DoesNotExist, ValueError):
-            raise Http404("Wardrobe item not found.")
-
-        # Ownership check: must belong to request.user
-        if item.user_id != request.user.id:
-            raise Http404("Wardrobe item not found.")
-
-        analysis, created = await ItemAnalysis.objects.aget_or_create(wardrobe_item=item)
-
-        if not created:
-            # Skip reprocessing if already DONE or currently PROCESSING
-            if analysis.status in (ItemAnalysis.JobStatus.DONE, ItemAnalysis.JobStatus.PROCESSING):
-                serializer = ItemAnalysisSerializer(analysis)
-                return Response(serializer.data, status=status.HTTP_200_OK)
-
-            # If analysis already exists and failed, reset status for retry
-            if analysis.status == ItemAnalysis.JobStatus.FAILED:
-                analysis.status = ItemAnalysis.JobStatus.PENDING
-                analysis.error_message = ""
-                analysis.internal_error_detail = ""
-                await analysis.asave(update_fields=["status", "error_message", "internal_error_detail", "updated_at"])
-
-        await submit_bg_removal_job_async(analysis)
-        _raise_if_analysis_failed(analysis)
-
-        serializer = ItemAnalysisSerializer(analysis)
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
         return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            {"detail": "Wardrobe item deleted successfully."},
+            status=status.HTTP_200_OK,
         )
+
 
 
 class ItemAnalysisStatusView(generics.RetrieveAPIView):
@@ -189,13 +145,24 @@ class ItemAnalysisStatusView(generics.RetrieveAPIView):
     serializer_class = ItemAnalysisSerializer
 
     def get_queryset(self):
-        return ItemAnalysis.objects.filter(wardrobe_item__user=self.request.user)
+        return ItemAnalysis.objects.filter(wardrobe_item__user=self.request.user).select_related("wardrobe_item", "wardrobe_item__category")
 
     def get_object(self):
-        analysis = super().get_object()
-        synced = sync_analysis_status(analysis)
-        _raise_if_analysis_failed(synced)
-        return synced
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        pk_val = self.kwargs[lookup_url_kwarg]
+        queryset = self.filter_queryset(self.get_queryset())
+        analysis = (
+            queryset.filter(wardrobe_item_id=pk_val).first()
+            or queryset.filter(pk=pk_val).first()
+        )
+        if not analysis:
+            raise Http404("Item analysis not found.")
+        _raise_if_analysis_failed(analysis)
+        return analysis
+
+
+
+
 
 
 @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
@@ -204,7 +171,7 @@ class BgRemovalWebhookView(AsyncAPIView):
 
     async def post(self, request, *args, **kwargs):
         raw_body = request.body
-        req_id = request.headers.get("X-Fal-Webhook-Request-Id") or ""
+        req_id = request.headers.get("X-Fal-Webhook-Request-Id") or request.headers.get("X-Fal-Request-Id") or ""
         user_id = request.headers.get("X-Fal-Webhook-User-Id") or ""
         timestamp = request.headers.get("X-Fal-Webhook-Timestamp") or ""
         sig_hex = request.headers.get("X-Fal-Webhook-Signature") or ""
@@ -216,30 +183,40 @@ class BgRemovalWebhookView(AsyncAPIView):
 
         payload_req_id = data.get("request_id") or req_id
 
-        # Signature verification if signature header is provided
+        logger.info(
+            "[WARDROBE AI WEBHOOK BG_REMOVAL] Received request: payload_req_id=%s req_id=%s sig_present=%s status=%s",
+            payload_req_id,
+            req_id,
+            bool(sig_hex),
+            data.get("status"),
+        )
+
         if sig_hex:
             is_valid = await sync_to_async(verify_webhook_signature)(
                 req_id, user_id, timestamp, sig_hex, raw_body
             )
             if not is_valid:
+                logger.warning("[WARDROBE AI WEBHOOK BG_REMOVAL] Signature verification failed for request_id=%s", payload_req_id)
                 return Response({"detail": "Invalid webhook signature."}, status=status.HTTP_403_FORBIDDEN)
 
         if not payload_req_id:
+            logger.warning("[WARDROBE AI WEBHOOK BG_REMOVAL] Missing request_id in payload and headers")
             return Response({"detail": "Missing request_id."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            analysis = await ItemAnalysis.objects.select_related("wardrobe_item").aget(
+            analysis = await ItemAnalysis.objects.select_related("wardrobe_item", "wardrobe_item__category").aget(
                 fal_request_id_bg_removal=payload_req_id,
-                status=ItemAnalysis.JobStatus.PROCESSING,
             )
         except ItemAnalysis.DoesNotExist:
+            logger.warning("[WARDROBE AI WEBHOOK BG_REMOVAL] ItemAnalysis not found for fal_request_id_bg_removal=%s", payload_req_id)
             return Response({"detail": "Matching processing job not found."}, status=status.HTTP_400_BAD_REQUEST)
 
         status_str = data.get("status")
-        payload_body = data.get("payload") or {}
+        payload_body = data.get("payload") if "payload" in data else data
 
         if status_str != "OK" or data.get("error"):
             err_msg = data.get("error") or str(payload_body) or "Background removal failed on fal.ai"
+            logger.error("[WARDROBE AI WEBHOOK BG_REMOVAL] fal.ai returned error for ItemAnalysis %s: %s", analysis.id, err_msg)
             analysis.status = ItemAnalysis.JobStatus.FAILED
             analysis.internal_error_detail = err_msg
             analysis.error_message = _friendly_error_message(err_msg)
@@ -257,6 +234,7 @@ class BgRemovalWebhookView(AsyncAPIView):
                 image_url = first_img.get("url") if isinstance(first_img, dict) else first_img
 
         if not image_url:
+            logger.error("[WARDROBE AI WEBHOOK BG_REMOVAL] No image URL extracted from payload for ItemAnalysis %s: %s", analysis.id, payload_body)
             analysis.status = ItemAnalysis.JobStatus.FAILED
             analysis.internal_error_detail = f"No image URL returned in payload: {payload_body}"
             analysis.error_message = "Failed to remove image background."
@@ -265,9 +243,11 @@ class BgRemovalWebhookView(AsyncAPIView):
 
         analysis.fal_cdn_url = image_url
         await analysis.asave(update_fields=["fal_cdn_url", "updated_at"])
+        logger.info("[WARDROBE AI WEBHOOK BG_REMOVAL] Saved fal_cdn_url=%s for ItemAnalysis %s. Submitting Vision job...", image_url, analysis.id)
 
         await submit_vision_job_async(analysis)
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
 
 
 @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
@@ -276,7 +256,7 @@ class VisionWebhookView(AsyncAPIView):
 
     async def post(self, request, *args, **kwargs):
         raw_body = request.body
-        req_id = request.headers.get("X-Fal-Webhook-Request-Id") or ""
+        req_id = request.headers.get("X-Fal-Webhook-Request-Id") or request.headers.get("X-Fal-Request-Id") or ""
         user_id = request.headers.get("X-Fal-Webhook-User-Id") or ""
         timestamp = request.headers.get("X-Fal-Webhook-Timestamp") or ""
         sig_hex = request.headers.get("X-Fal-Webhook-Signature") or ""
@@ -288,29 +268,40 @@ class VisionWebhookView(AsyncAPIView):
 
         payload_req_id = data.get("request_id") or req_id
 
+        logger.info(
+            "[WARDROBE AI WEBHOOK VISION] Received request: payload_req_id=%s req_id=%s sig_present=%s status=%s",
+            payload_req_id,
+            req_id,
+            bool(sig_hex),
+            data.get("status"),
+        )
+
         if sig_hex:
             is_valid = await sync_to_async(verify_webhook_signature)(
                 req_id, user_id, timestamp, sig_hex, raw_body
             )
             if not is_valid:
+                logger.warning("[WARDROBE AI WEBHOOK VISION] Signature verification failed for request_id=%s", payload_req_id)
                 return Response({"detail": "Invalid webhook signature."}, status=status.HTTP_403_FORBIDDEN)
 
         if not payload_req_id:
+            logger.warning("[WARDROBE AI WEBHOOK VISION] Missing request_id in payload and headers")
             return Response({"detail": "Missing request_id."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             analysis = await ItemAnalysis.objects.select_related("wardrobe_item", "wardrobe_item__category").aget(
                 fal_request_id_vision=payload_req_id,
-                status=ItemAnalysis.JobStatus.PROCESSING,
             )
         except ItemAnalysis.DoesNotExist:
+            logger.warning("[WARDROBE AI WEBHOOK VISION] ItemAnalysis not found for fal_request_id_vision=%s", payload_req_id)
             return Response({"detail": "Matching processing job not found."}, status=status.HTTP_400_BAD_REQUEST)
 
         status_str = data.get("status")
-        payload_body = data.get("payload") or {}
+        payload_body = data.get("payload") if "payload" in data else data
 
         if status_str != "OK" or data.get("error"):
             err_msg = data.get("error") or str(payload_body) or "Vision analysis failed on fal.ai"
+            logger.error("[WARDROBE AI WEBHOOK VISION] fal.ai returned error for ItemAnalysis %s: %s", analysis.id, err_msg)
             analysis.status = ItemAnalysis.JobStatus.FAILED
             analysis.internal_error_detail = err_msg
             analysis.error_message = _friendly_error_message(err_msg)
@@ -330,6 +321,7 @@ class VisionWebhookView(AsyncAPIView):
         matches_category = parsed.get("matches_category", True)
         if not matches_category:
             friendly_msg = f"We couldn't find a clear {category_name} in this photo — please upload a photo showing just the item."
+            logger.warning("[WARDROBE AI WEBHOOK VISION] Category mismatch for ItemAnalysis %s: %s", analysis.id, friendly_msg)
             analysis.status = ItemAnalysis.JobStatus.FAILED
             analysis.internal_error_detail = f"Category mismatch: vision model reported image does not match category '{category_name}'."
             analysis.error_message = friendly_msg
@@ -347,11 +339,12 @@ class VisionWebhookView(AsyncAPIView):
                 filename = f"processed_item_{analysis.wardrobe_item_id}.png"
                 await sync_to_async(analysis.processed_image.save)(filename, ContentFile(img_resp.content), save=False)
             except Exception as exc:
-                logger.warning("Cloudinary migration failed for ItemAnalysis %s: %s", analysis.id, exc)
+                logger.warning("[WARDROBE AI WEBHOOK VISION] Cloudinary migration failed for ItemAnalysis %s: %s", analysis.id, exc)
 
         analysis.status = ItemAnalysis.JobStatus.DONE
         analysis.error_message = ""
         analysis.internal_error_detail = ""
         await analysis.asave(update_fields=["color", "description", "processed_image", "status", "error_message", "internal_error_detail", "updated_at"])
+        logger.info("[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s)", analysis.id, analysis.wardrobe_item_id)
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
