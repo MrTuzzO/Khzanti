@@ -2,19 +2,56 @@ import logging
 import fal_client
 import requests
 from django.core.files.base import ContentFile
+
+from .adapters import get_profile_constraints
 from .models import Avatar
 
 logger = logging.getLogger(__name__)
 
-AVATAR_STYLE_PROMPT = (
-    "Keep the exact same facial features as image 1 — same eyes, nose shape, "
-    "jawline, skin tone, hairstyle. Change everything else: render the person "
-    "full-body, standing, front-facing, arms relaxed, in a semi-realistic 3D "
-    "rendered character style with soft studio lighting, against a plain light "
-    "gray background. Casual modern outfit."
-)
+
+AVATAR_STYLE_PROMPTS = {
+    Avatar.Style.REALISTIC: (
+        "Keep the exact same facial features as image 1 — same eyes, nose shape, "
+        "jawline, skin tone, hairstyle. Render the person full-body, standing, "
+        "front-facing, arms relaxed, in a semi-realistic 3D rendered character style "
+        "with soft studio lighting, against a plain light gray background. Casual modern outfit."
+    ),
+    Avatar.Style.CARTOON: (
+        "Preserve the person's identity and recognizable facial characteristics from image 1 — "
+        "same hairstyle, skin tone, and distinct facial features. Transform the rendering into a "
+        "polished 3D cartoon character style. Full-body, standing, front-facing, arms relaxed, "
+        "in a casual modern outfit, against a plain light gray background with soft studio lighting."
+    ),
+}
 
 FAL_MODEL_ID = "fal-ai/nano-banana-pro/edit"
+
+
+def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
+    """
+    Constructs the fal.ai prompt based on the selected avatar style
+    and available non-None user profile constraints.
+    """
+    base_prompt = AVATAR_STYLE_PROMPTS.get(style, AVATAR_STYLE_PROMPTS[Avatar.Style.REALISTIC])
+
+    if not profile_constraints:
+        return base_prompt
+
+    lines = []
+    if profile_constraints.get("gender"):
+        lines.append(f"Gender: {profile_constraints['gender']}")
+    if profile_constraints.get("height"):
+        lines.append(f"Height: {profile_constraints['height']}")
+    if profile_constraints.get("age"):
+        lines.append(f"Age: {profile_constraints['age']}")
+    if profile_constraints.get("body_type"):
+        lines.append(f"Body type: {profile_constraints['body_type']}")
+
+    if lines:
+        profile_text = "\nProfile information:\n" + "\n".join(lines)
+        return f"{base_prompt}\n{profile_text}"
+
+    return base_prompt
 
 
 def _friendly_error_message(raw_error: str) -> str:
@@ -36,10 +73,13 @@ def submit_avatar_job(avatar: Avatar) -> None:
     """
     try:
         selfie_url = avatar.source_photo.url
+        profile_constraints = get_profile_constraints(avatar.user)
+        prompt = build_avatar_prompt(avatar.style, profile_constraints)
+
         handle = fal_client.submit(
             FAL_MODEL_ID,
             arguments={
-                "prompt": AVATAR_STYLE_PROMPT,
+                "prompt": prompt,
                 "image_urls": [selfie_url],
                 "resolution": "1K",
                 "output_format": "png",
@@ -55,6 +95,7 @@ def submit_avatar_job(avatar: Avatar) -> None:
         avatar.internal_error_detail = raw_error
         avatar.error_message = _friendly_error_message(raw_error)
         avatar.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
 
 
 def sync_avatar_status(avatar: Avatar) -> Avatar:
