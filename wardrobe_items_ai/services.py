@@ -153,14 +153,27 @@ async def submit_vision_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
     wardrobe_item_obj = await sync_to_async(lambda: analysis.wardrobe_item)()
     category_obj = await sync_to_async(lambda: getattr(wardrobe_item_obj, "category", None))()
     category_name = getattr(category_obj, "name", "clothing item") if category_obj else "clothing item"
+    category_slug = getattr(category_obj, "slug", "") if category_obj else ""
+
+    logger.info(
+        "[WARDROBE AI DEBUG] item_id=%s analysis_id=%s category_id=%s category_name=%s category_slug=%s",
+        getattr(wardrobe_item_obj, "id", None),
+        analysis.id,
+        getattr(category_obj, "id", None),
+        category_name,
+        category_slug,
+    )
+
+    category_term = f"{category_name} ({category_slug})" if (category_slug and category_slug.lower() != category_name.lower()) else category_name
 
     prompt = (
         f"Analyze this image of a clothing or wardrobe item.\n"
-        f"1. Check if the image displays an item matching the category '{category_name}'. Set 'matches_category' to true if yes, false if it is a completely different object or wrong category.\n"
+        f"1. Check if the image displays an item matching the category '{category_term}'. Set 'matches_category' to true if yes (including regional/traditional variations), false if it is a completely different object or wrong category.\n"
         f"2. Extract the primary dominant color of the item.\n"
         f"3. Provide a short 1-2 sentence description of the item's visual style and key features.\n"
         f"Respond ONLY with a JSON object containing keys: 'matches_category' (boolean), 'color' (string), 'description' (string)."
     )
+
 
     base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
     webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/vision/"
@@ -198,6 +211,10 @@ def submit_analysis_job(analysis: ItemAnalysis) -> ItemAnalysis:
 
 def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     """
-    Returns the analysis instance as-is (read-only status check).
+    Deprecated active status polling fallback.
+    Returns analysis directly from database state without performing expensive network calls.
+    Database state transitions are driven 100% asynchronously by fal.ai webhooks.
     """
     return analysis
+
+
