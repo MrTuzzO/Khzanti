@@ -10,13 +10,26 @@ class Avatar(models.Model):
         DONE = "done", _("Done")
         FAILED = "failed", _("Failed")
 
+    class Style(models.TextChoices):
+        REALISTIC = "realistic", _("Realistic")
+        CARTOON = "cartoon", _("Cartoon")
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="avatars",
+        null=True,
+        blank=True,
         db_index=True,
     )
-    source_photo = models.ImageField(upload_to="avatars/source/")
+    source_photo = models.ImageField(upload_to="avatars/source/", blank=True, null=True)
+    style = models.CharField(
+        max_length=20,
+        choices=Style.choices,
+        default=Style.REALISTIC,
+        db_index=True,
+    )
+    is_default = models.BooleanField(default=False, db_index=True)
     status = models.CharField(
         max_length=20,
         choices=JobStatus.choices,
@@ -36,6 +49,17 @@ class Avatar(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_default"],
+                condition=models.Q(is_default=True),
+                name="unique_default_avatar",
+            )
+        ]
 
     def __str__(self):
-        return f"Avatar {self.id} - {self.user} ({self.status})"
+        if self.is_default:
+            return f"System Default Avatar {self.id}"
+        return f"Avatar {self.id} - {self.user} ({self.style}, {self.status})"
+
+
