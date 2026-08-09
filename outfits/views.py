@@ -13,9 +13,9 @@ from rest_framework.views import APIView
 
 from core.exceptions import ServiceError
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob
-from .serializers import OutfitJobSerializer, OutfitJobStatusSerializer, TryOnCreateSerializer
-from .services import submit_try_on_job
+from .models import JobStatus, OutfitJob, TriggerType
+from .serializers import OutfitJobSerializer, OutfitJobStatusSerializer, TodayOutfitSerializer, TryOnCreateSerializer
+from .services import get_or_create_today_auto_job, submit_try_on_job
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,33 @@ class TryOnStatusView(generics.RetrieveAPIView):
         }, status=status.HTTP_200_OK)
 
 
+class TodayOutfitView(generics.RetrieveAPIView):
+    """
+    Dashboard-triggered lazy daily AUTO OutfitJob generation & retrieval endpoint.
+    GET /api/v1/outfits/today/
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = TodayOutfitSerializer
+
+    def get(self, request, *args, **kwargs):
+        job = get_or_create_today_auto_job(request.user)
+
+        msg = "Today's outfit is ready." if job.status == JobStatus.DONE else "Today's outfit generation started."
+        if job.status == JobStatus.FAILED:
+            msg = "Today's outfit generation failed."
+
+        serializer = self.get_serializer(job)
+        return Response({
+            "status": "success",
+            "code": status.HTTP_200_OK,
+            "message": msg,
+            "data": serializer.data,
+        }, status=status.HTTP_200_OK)
+
+
 @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
 class TryOnWebhookView(AsyncAPIView):
+    authentication_classes = []
     permission_classes = []
 
     async def post(self, request, *args, **kwargs):
@@ -170,6 +195,11 @@ class TryOnWebhookView(AsyncAPIView):
         except OutfitJob.DoesNotExist:
             logger.warning("[OUTFITS WEBHOOK TRY-ON] OutfitJob not found for fal_request_id=%s", payload_req_id)
             return Response({"detail": "Matching processing job not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Idempotency check
+        if job.status in (JobStatus.DONE, JobStatus.FAILED):
+            logger.info("[OUTFITS WEBHOOK TRY-ON] OutfitJob %s already in terminal state (%s). Skipping duplicate callback.", job.id, job.status)
+            return Response({"status": "already_processed", "job_status": job.status}, status=status.HTTP_200_OK)
 
         status_str = data.get("status")
         payload_body = data.get("payload") if "payload" in data else data
