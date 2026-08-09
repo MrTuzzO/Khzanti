@@ -54,6 +54,10 @@ class OutfitJob(models.Model):
     )
     error_message = models.TextField(blank=True)
     internal_error_detail = models.TextField(blank=True)
+    reasoning_title = models.CharField(max_length=255, blank=True)
+    reasoning_subtitle = models.CharField(max_length=255, blank=True)
+    reasoning_items = models.JSONField(default=list, blank=True)
+    reasoning_note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
