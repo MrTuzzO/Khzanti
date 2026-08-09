@@ -15,6 +15,8 @@ DEBUG = os.getenv('DEBUG') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") #ai
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1") #ai
 
 
 # Application definition
