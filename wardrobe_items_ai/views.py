@@ -317,13 +317,22 @@ class VisionWebhookView(AsyncAPIView):
         parsed = _parse_json_response(raw_output)
         category_obj = getattr(analysis.wardrobe_item, "category", None)
         category_name = getattr(category_obj, "name", "clothing item") if category_obj else "clothing item"
+        detected_item_type = str(parsed.get("detected_item_type", "")).strip()
 
         matches_category = parsed.get("matches_category", True)
         if not matches_category:
             friendly_msg = f"We couldn't find a clear {category_name} in this photo — please upload a photo showing just the item."
-            logger.warning("[WARDROBE AI WEBHOOK VISION] Category mismatch for ItemAnalysis %s: %s", analysis.id, friendly_msg)
+            logger.warning(
+                "[WARDROBE AI WEBHOOK VISION] Category mismatch for ItemAnalysis %s (detected_item_type='%s'): %s",
+                analysis.id,
+                detected_item_type,
+                friendly_msg,
+            )
             analysis.status = ItemAnalysis.JobStatus.FAILED
-            analysis.internal_error_detail = f"Category mismatch: vision model reported image does not match category '{category_name}'."
+            analysis.internal_error_detail = (
+                f"Category mismatch: vision model reported image (detected item: '{detected_item_type or 'unknown'}') "
+                f"does not match category '{category_name}'."
+            )
             analysis.error_message = friendly_msg
             await analysis.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
             return Response({"status": "error_handled"}, status=status.HTTP_200_OK)
@@ -345,6 +354,11 @@ class VisionWebhookView(AsyncAPIView):
         analysis.error_message = ""
         analysis.internal_error_detail = ""
         await analysis.asave(update_fields=["color", "description", "processed_image", "status", "error_message", "internal_error_detail", "updated_at"])
-        logger.info("[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s)", analysis.id, analysis.wardrobe_item_id)
+        logger.info(
+            "[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s, detected_item_type='%s')",
+            analysis.id,
+            analysis.wardrobe_item_id,
+            detected_item_type,
+        )
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
