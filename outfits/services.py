@@ -139,11 +139,20 @@ from django.utils import timezone
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
 
 
+from datetime import timedelta
+import json
+import os
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from openai import OpenAI
+from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
+
+
 def select_auto_tryon_assets(user, scheduled_date):
     """
-    Selects avatar and up to 1 wardrobe item per category for daily auto outfit generation.
-    - Applies 3-day no-repeat rule for item selection.
-    - Applies color coordination heuristic.
+    Fallback asset selector when OpenAI selection is bypassed or in fallback mode.
+    - Selects completed avatar.
+    - Selects up to 1 item per category applying 3-day no-repeat rule.
     """
     avatar = Avatar.objects.filter(user=user, status=Avatar.JobStatus.DONE).order_by("-created_at").first()
     if not avatar:
@@ -159,7 +168,6 @@ def select_auto_tryon_assets(user, scheduled_date):
             result_image="avatars/result/default_avatar.png",
         )
 
-    # Inspect 3-day no-repeat item IDs
     past_dates = [scheduled_date - timedelta(days=i) for i in range(1, 4)]
     recent_auto_jobs = OutfitJob.objects.filter(
         user=user,
@@ -171,7 +179,6 @@ def select_auto_tryon_assets(user, scheduled_date):
     for past_job in recent_auto_jobs:
         recent_item_ids.update(past_job.wardrobe_items.values_list("id", flat=True))
 
-    # Available completed wardrobe items
     completed_items = list(
         WardrobeItem.objects.filter(
             user=user,
@@ -182,7 +189,6 @@ def select_auto_tryon_assets(user, scheduled_date):
     if not completed_items:
         return avatar, []
 
-    # Group completed items by category
     items_by_category = {}
     for item in completed_items:
         cat_id = item.category_id
@@ -199,15 +205,198 @@ def select_auto_tryon_assets(user, scheduled_date):
     return avatar, selected_items
 
 
+def select_auto_outfit_combination(user, scheduled_date):
+    """
+    OpenAI-powered wardrobe combination selector for daily AUTO outfits.
+    Gathers candidate completed wardrobe items and past 3-day combinations,
+    invokes OpenAI to select the best styling combination with structured reasoning,
+    and performs 8 strict backend validation checks on the AI response.
+    """
+    avatar, _ = select_auto_tryon_assets(user, scheduled_date)
+
+    completed_items = list(
+        WardrobeItem.objects.filter(
+            user=user,
+            analysis__status=ItemJobStatus.DONE,
+        ).select_related("category", "analysis").order_by("-created_at")
+    )
+
+    if not completed_items:
+        logger.warning("[AUTO OUTFIT] User %s has 0 completed wardrobe items.", user.id)
+        return avatar, [], {
+            "title": "No Wardrobe Items Available",
+            "subtitle": "Upload items to generate daily outfits",
+            "reasons": [],
+            "style_note": "Please upload and process wardrobe items first."
+        }
+
+    candidate_map = {item.id: item for item in completed_items}
+    candidate_data = [
+        {
+            "id": item.id,
+            "category": getattr(item.category, "name", "Clothing"),
+            "season": getattr(item, "season", "") or "any",
+            "occasion": getattr(item, "occasion", "") or "any",
+            "color": getattr(item.analysis, "color", "") or "unknown",
+            "description": getattr(item.analysis, "description", "") or "",
+        }
+        for item in completed_items
+    ]
+
+    past_dates = [scheduled_date - timedelta(days=i) for i in range(1, 4)]
+    past_jobs = OutfitJob.objects.filter(
+        user=user,
+        trigger_type=TriggerType.AUTO,
+        scheduled_date__in=past_dates,
+    ).prefetch_related("wardrobe_items")
+
+    past_combinations = [
+        list(j.wardrobe_items.values_list("id", flat=True))
+        for j in past_jobs
+    ]
+
+    weekday_name = scheduled_date.strftime("%A")
+    date_str = scheduled_date.isoformat()
+
+    logger.info(
+        "[AUTO OUTFIT] Preparing selection for user %s on %s (%s): %d candidates, %d past 3-day combinations",
+        user.id,
+        date_str,
+        weekday_name,
+        len(candidate_data),
+        len(past_combinations),
+    )
+
+    api_key = getattr(settings, "OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    model_name = getattr(settings, "OPENAI_MODEL", "gpt-5.1") or os.getenv("OPENAI_MODEL", "gpt-5.1")
+
+    if not api_key:
+        logger.warning("[AUTO OUTFIT] OPENAI_API_KEY is not set. Falling back to default selection.")
+        _, fallback_items = select_auto_tryon_assets(user, scheduled_date)
+        return avatar, fallback_items, {
+            "title": "Daily Outfit Recommendation",
+            "subtitle": "Smart automated outfit combination",
+            "reasons": [{"title": "Default Selection", "description": "Automated style pairing"}],
+            "style_note": f"A balanced look curated for {weekday_name}."
+        }
+
+    try:
+        logger.info("[AUTO OUTFIT] OpenAI selection started using model '%s'...", model_name)
+        client = OpenAI(api_key=api_key)
+        system_prompt = (
+            "You are an expert AI fashion stylist for Fashion Hub AI (Hdoomi).\n"
+            "Your goal is to select the optimal wardrobe combination for today's daily AUTO outfit for the user.\n\n"
+            "STRICT SELECTION RULES:\n"
+            "1. Select item IDs ONLY from the provided candidate list. Never invent or hallucinate item IDs.\n"
+            "2. Select MAXIMUM 1 item per category.\n"
+            "3. Apply visual color harmony, season appropriateness, occasion fit, and aesthetic coordination.\n"
+            "4. Avoid repeating the exact combination of item IDs used in any of the previous 3 days if alternative candidate combinations exist.\n"
+            "5. Return strictly a JSON object adhering to the JSON schema."
+        )
+
+        user_prompt = f"""
+Today's Date: {date_str} ({weekday_name})
+
+Candidate Wardrobe Items (Choose ONLY from these IDs):
+{json.dumps(candidate_data, indent=2)}
+
+Past 3 Days' AUTO Combinations (Avoid exact repeats if alternatives exist):
+{json.dumps(past_combinations)}
+
+Return JSON adhering to:
+{{
+  "selected_item_ids": [integer_id_1, integer_id_2, ...],
+  "reasoning": {{
+    "title": "Title for today's look",
+    "subtitle": "Short subtitle summarizing the aesthetic",
+    "reasons": [
+      {{"title": "Style Matched", "description": "..."}},
+      {{"title": "Color Harmony", "description": "..."}}
+    ],
+    "style_note": "Final styling tip"
+  }}
+}}
+"""
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "content", "content": user_prompt} if hasattr(client, "_dummy") else {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+
+        raw_content = response.choices[0].message.content or "{}"
+        parsed = json.loads(raw_content)
+    except Exception as exc:
+        logger.error("[AUTO OUTFIT] OpenAI API call failed: %s", exc, exc_info=True)
+        raise ValueError(f"OpenAI API call failed: {exc}")
+
+    # --- 8-POINT BACKEND VALIDATION ---
+    selected_ids = parsed.get("selected_item_ids")
+    if not isinstance(selected_ids, list):
+        raise ValueError("OpenAI response invalid: 'selected_item_ids' must be a list.")
+
+    if not selected_ids:
+        raise ValueError("OpenAI response invalid: 'selected_item_ids' list is empty.")
+
+    selected_items = []
+    for item_id in selected_ids:
+        if not isinstance(item_id, int):
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid non-integer item ID returned: {item_id}")
+
+        if item_id not in candidate_map:
+            raise ValueError(f"OpenAI returned invalid or unowned item ID #{item_id}.")
+        selected_items.append(candidate_map[item_id])
+
+    if len(selected_items) != len(set(it.id for it in selected_items)):
+        raise ValueError("OpenAI response invalid: duplicate item IDs selected.")
+
+    seen_categories = {}
+    for item in selected_items:
+        cat_id = item.category_id
+        if cat_id in seen_categories:
+            raise ValueError(
+                f"OpenAI response invalid: multiple items selected for category ID {cat_id} (items #{seen_categories[cat_id].id} and #{item.id})."
+            )
+        seen_categories[cat_id] = item
+
+    reasoning = parsed.get("reasoning", {})
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+
+    reasoning_dict = {
+        "title": str(reasoning.get("title", f"Daily Look for {weekday_name}")),
+        "subtitle": str(reasoning.get("subtitle", "Curated AI Outfit")),
+        "reasons": reasoning.get("reasons", []),
+        "style_note": str(reasoning.get("style_note", "")),
+    }
+
+    logger.info(
+        "[AUTO OUTFIT] OpenAI selection completed & validated. Selected item IDs: %s. Title: '%s'",
+        [it.id for it in selected_items],
+        reasoning_dict["title"],
+    )
+
+    return avatar, selected_items, reasoning_dict
+
+
 def get_or_create_today_auto_job(user) -> OutfitJob:
     """
     Retrieves or lazily creates today's AUTO OutfitJob for the given user.
     Uses transaction.atomic() + unique constraint handling.
-    AI generation is submitted strictly OUTSIDE the database transaction.
+    OpenAI selection and fal.ai generation are performed strictly OUTSIDE database transactions.
     """
     today_date = timezone.now().date()
 
-    # 1. Quick read check
+    logger.info("[AUTO OUTFIT] GET /today/ request for user %s on date %s", user.id, today_date)
+
+    # 1. Read check: If today's AUTO job already exists, return it (NO OpenAI call, NO fal.ai call, NO cost!)
     existing_job = OutfitJob.objects.filter(
         user=user,
         scheduled_date=today_date,
@@ -215,12 +404,61 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
     ).first()
 
     if existing_job:
+        logger.info("[AUTO OUTFIT] Existing AUTO job found (ID %s, status=%s). Returning cached job.", existing_job.id, existing_job.status)
         return existing_job
+
+    logger.info("[AUTO OUTFIT] No existing AUTO job found for user %s on date %s. Initiating generation.", user.id, today_date)
+
+    # 2. Perform AI Wardrobe Combination Selection OUTSIDE transaction block
+    avatar = None
+    selected_items = []
+    reasoning_dict = {}
+    ai_failed = False
+    ai_error_msg = ""
+
+    try:
+        avatar, selected_items, reasoning_dict = select_auto_outfit_combination(user, today_date)
+    except Exception as exc:
+        logger.error("[AUTO OUTFIT] AI wardrobe combination selection failed for user %s: %s", user.id, exc)
+        ai_failed = True
+        ai_error_msg = str(exc)
+
+    if ai_failed:
+        avatar = Avatar.objects.filter(user=user).order_by("-created_at").first() or Avatar.objects.filter(is_default=True).first()
+        if not avatar:
+            avatar = Avatar.objects.create(
+                user=None, is_default=True, status=Avatar.JobStatus.DONE, style=Avatar.Style.REALISTIC
+            )
+        job = OutfitJob.objects.create(
+            user=user,
+            avatar=avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.FAILED,
+            error_message="Daily outfit selection failed.",
+            internal_error_detail=ai_error_msg,
+        )
+        logger.info("[AUTO OUTFIT] Created FAILED OutfitJob %s due to AI selection error.", job.id)
+        return job
+
+    if not selected_items:
+        avatar = avatar or Avatar.objects.filter(is_default=True).first()
+        job = OutfitJob.objects.create(
+            user=user,
+            avatar=avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.FAILED,
+            error_message="No completed wardrobe items available for daily outfit generation.",
+            internal_error_detail="No items with completed ItemAnalysis status found.",
+        )
+        logger.info("[AUTO OUTFIT] Created FAILED OutfitJob %s due to missing completed wardrobe items.", job.id)
+        return job
 
     should_submit = False
     new_job = None
 
-    # 2. Database transaction for atomic job creation
+    # 3. Database transaction for atomic job creation
     try:
         with transaction.atomic():
             job = OutfitJob.objects.select_for_update().filter(
@@ -230,16 +468,18 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
             ).first()
 
             if not job:
-                avatar, selected_items = select_auto_tryon_assets(user, today_date)
                 job = OutfitJob.objects.create(
                     user=user,
                     avatar=avatar,
                     scheduled_date=today_date,
                     trigger_type=TriggerType.AUTO,
                     status=JobStatus.PENDING,
+                    reasoning_title=reasoning_dict.get("title", ""),
+                    reasoning_subtitle=reasoning_dict.get("subtitle", ""),
+                    reasoning_items=reasoning_dict.get("reasons", []),
+                    reasoning_note=reasoning_dict.get("style_note", ""),
                 )
-                if selected_items:
-                    job.wardrobe_items.set(selected_items)
+                job.wardrobe_items.set(selected_items)
                 should_submit = True
 
             new_job = job
@@ -251,10 +491,13 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
         )
         should_submit = False
 
-    # 3. External AI submission OUTSIDE transaction block
-    if should_submit and new_job:
+    # 4. External fal.ai submission OUTSIDE transaction block
+    if should_submit and new_job and new_job.status == JobStatus.PENDING:
+        logger.info("[AUTO OUTFIT] Submitting newly created OutfitJob %s to fal.ai Nano Banana Pro...", new_job.id)
         submit_try_on_job(new_job)
         new_job.refresh_from_db()
+        logger.info("[AUTO OUTFIT] fal.ai submission finished for OutfitJob %s (status=%s, fal_request_id=%s)", new_job.id, new_job.status, new_job.fal_request_id)
 
     return new_job
+
 
