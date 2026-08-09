@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -12,6 +13,7 @@ class JobStatus(models.TextChoices):
 
 class TriggerType(models.TextChoices):
     MANUAL = "manual", _("Manual")
+    AUTO = "auto", _("Auto")
 
 
 class OutfitJob(models.Model):
@@ -28,6 +30,10 @@ class OutfitJob(models.Model):
     wardrobe_items = models.ManyToManyField(
         "wardrobe_items_ai.WardrobeItem",
         related_name="outfit_jobs",
+    )
+    scheduled_date = models.DateField(
+        default=timezone.now,
+        db_index=True,
     )
     trigger_type = models.CharField(
         max_length=20,
@@ -55,6 +61,14 @@ class OutfitJob(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Outfit Job"
         verbose_name_plural = "Outfit Jobs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "scheduled_date", "trigger_type"],
+                condition=models.Q(trigger_type="auto"),
+                name="unique_auto_outfit_per_user_per_day",
+            )
+        ]
 
     def __str__(self):
-        return f"OutfitJob {self.id} - {self.user} ({self.status})"
+        return f"OutfitJob {self.id} - {self.user} ({self.trigger_type}, {self.status})"
+
