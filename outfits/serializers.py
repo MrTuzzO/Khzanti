@@ -1,7 +1,8 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from avatars.models import Avatar
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
-from .models import OutfitJob
+from .models import JobStatus, OutfitJob
 
 
 class TryOnCreateSerializer(serializers.Serializer):
@@ -102,6 +103,7 @@ class OutfitJobSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_result_image(self, obj):
         if obj.result_image:
             try:
@@ -115,3 +117,35 @@ class OutfitJobStatusSerializer(serializers.Serializer):
     status = serializers.CharField()
     result_image = serializers.CharField(allow_null=True)
     error_message = serializers.CharField(required=False, allow_blank=True)
+
+
+class TodayOutfitSerializer(serializers.ModelSerializer):
+    date = serializers.DateField(source="scheduled_date", read_only=True)
+    avatar = serializers.PrimaryKeyRelatedField(read_only=True)
+    wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    result_image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OutfitJob
+        fields = [
+            "id",
+            "date",
+            "trigger_type",
+            "status",
+            "avatar",
+            "wardrobe_items",
+            "result_image",
+            "error_message",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_result_image(self, obj):
+        if obj.status == JobStatus.DONE and obj.result_image:
+            try:
+                return obj.result_image.url
+            except Exception:
+                pass
+        return None
