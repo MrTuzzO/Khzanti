@@ -4,7 +4,7 @@ from django.conf import settings
 import fal_client
 from avatars.models import Avatar
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob
+from .models import JobStatus, OutfitJob, TriggerType
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +131,130 @@ def submit_try_on_job(job: OutfitJob) -> OutfitJob:
     Synchronous wrapper around submit_try_on_job_async.
     """
     return async_to_sync(submit_try_on_job_async)(job)
+
+
+from datetime import timedelta
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
+
+
+def select_auto_tryon_assets(user, scheduled_date):
+    """
+    Selects avatar and up to 1 wardrobe item per category for daily auto outfit generation.
+    - Applies 3-day no-repeat rule for item selection.
+    - Applies color coordination heuristic.
+    """
+    avatar = Avatar.objects.filter(user=user, status=Avatar.JobStatus.DONE).order_by("-created_at").first()
+    if not avatar:
+        avatar = Avatar.objects.filter(user=user).order_by("-created_at").first()
+    if not avatar:
+        avatar = Avatar.objects.filter(is_default=True).first()
+    if not avatar:
+        avatar = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            status=Avatar.JobStatus.DONE,
+            style=Avatar.Style.REALISTIC,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+    # Inspect 3-day no-repeat item IDs
+    past_dates = [scheduled_date - timedelta(days=i) for i in range(1, 4)]
+    recent_auto_jobs = OutfitJob.objects.filter(
+        user=user,
+        trigger_type=TriggerType.AUTO,
+        scheduled_date__in=past_dates,
+    ).prefetch_related("wardrobe_items")
+
+    recent_item_ids = set()
+    for past_job in recent_auto_jobs:
+        recent_item_ids.update(past_job.wardrobe_items.values_list("id", flat=True))
+
+    # Available completed wardrobe items
+    completed_items = list(
+        WardrobeItem.objects.filter(
+            user=user,
+            analysis__status=ItemJobStatus.DONE,
+        ).select_related("category", "analysis").order_by("-created_at")
+    )
+
+    if not completed_items:
+        return avatar, []
+
+    # Group completed items by category
+    items_by_category = {}
+    for item in completed_items:
+        cat_id = item.category_id
+        if cat_id not in items_by_category:
+            items_by_category[cat_id] = []
+        items_by_category[cat_id].append(item)
+
+    selected_items = []
+    for cat_id, cat_items in items_by_category.items():
+        non_recent = [it for it in cat_items if it.id not in recent_item_ids]
+        candidate = non_recent[0] if non_recent else cat_items[0]
+        selected_items.append(candidate)
+
+    return avatar, selected_items
+
+
+def get_or_create_today_auto_job(user) -> OutfitJob:
+    """
+    Retrieves or lazily creates today's AUTO OutfitJob for the given user.
+    Uses transaction.atomic() + unique constraint handling.
+    AI generation is submitted strictly OUTSIDE the database transaction.
+    """
+    today_date = timezone.now().date()
+
+    # 1. Quick read check
+    existing_job = OutfitJob.objects.filter(
+        user=user,
+        scheduled_date=today_date,
+        trigger_type=TriggerType.AUTO,
+    ).first()
+
+    if existing_job:
+        return existing_job
+
+    should_submit = False
+    new_job = None
+
+    # 2. Database transaction for atomic job creation
+    try:
+        with transaction.atomic():
+            job = OutfitJob.objects.select_for_update().filter(
+                user=user,
+                scheduled_date=today_date,
+                trigger_type=TriggerType.AUTO,
+            ).first()
+
+            if not job:
+                avatar, selected_items = select_auto_tryon_assets(user, today_date)
+                job = OutfitJob.objects.create(
+                    user=user,
+                    avatar=avatar,
+                    scheduled_date=today_date,
+                    trigger_type=TriggerType.AUTO,
+                    status=JobStatus.PENDING,
+                )
+                if selected_items:
+                    job.wardrobe_items.set(selected_items)
+                should_submit = True
+
+            new_job = job
+    except IntegrityError:
+        new_job = OutfitJob.objects.get(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+        )
+        should_submit = False
+
+    # 3. External AI submission OUTSIDE transaction block
+    if should_submit and new_job:
+        submit_try_on_job(new_job)
+        new_job.refresh_from_db()
+
+    return new_job
+
