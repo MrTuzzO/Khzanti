@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'news',
     'avatars',
     'wardrobe_items_ai',
+    'outfits',
     'django_cleanup.apps.CleanupConfig',
 ]
 
