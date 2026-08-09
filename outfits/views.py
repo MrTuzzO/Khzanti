@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 from asgiref.sync import async_to_sync, sync_to_async
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.http import Http404
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 import requests
 from rest_framework import generics, status
@@ -148,6 +150,64 @@ class TodayOutfitView(generics.RetrieveAPIView):
             "code": status.HTTP_200_OK,
             "message": msg,
             "data": serializer.data,
+        }, status=status.HTTP_200_OK)
+
+
+class TodayOutfitResetView(APIView):
+    """
+    Development/testing endpoint to reset today's AUTO OutfitJob for the authenticated user.
+    Does NOT invoke any AI services.
+    Enabled ONLY when DEBUG=True.
+    DELETE /api/v1/outfits/today/reset/
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=None,
+        responses={
+            200: OpenApiTypes.OBJECT,
+            403: OpenApiTypes.OBJECT,
+        },
+        description="Development/testing endpoint to reset today's AUTO OutfitJob for the authenticated user. Enabled ONLY when DEBUG=True."
+    )
+    def delete(self, request, *args, **kwargs):
+        if not getattr(settings, "DEBUG", False):
+            return Response(
+                {"detail": "This development endpoint is disabled in production."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        today_date = timezone.now().date()
+        deleted_count, _ = OutfitJob.objects.filter(
+            user=request.user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+        ).delete()
+
+        if deleted_count == 0:
+            logger.info(
+                "[AUTO OUTFIT RESET] No AUTO outfit job found for user %s on date %s to reset.",
+                request.user.id,
+                today_date,
+            )
+            return Response({
+                "status": "error",
+                "code": status.HTTP_404_NOT_FOUND,
+                "message": "No AUTO outfit job found for today to reset.",
+                "data": None,
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        logger.info(
+            "[AUTO OUTFIT RESET] Reset today's AUTO outfit job for user %s (deleted %d job(s))",
+            request.user.id,
+            deleted_count,
+        )
+
+        return Response({
+            "status": "success",
+            "code": status.HTTP_200_OK,
+            "message": "Today's AUTO outfit reset successfully.",
+            "data": None,
         }, status=status.HTTP_200_OK)
 
 
