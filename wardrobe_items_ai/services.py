@@ -168,10 +168,15 @@ async def submit_vision_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
 
     prompt = (
         f"Analyze this image of a clothing or wardrobe item.\n"
-        f"1. Check if the image displays an item matching the category '{category_term}'. Set 'matches_category' to true if yes (including regional/traditional variations), false if it is a completely different object or wrong category.\n"
-        f"2. Extract the primary dominant color of the item.\n"
-        f"3. Provide a short 1-2 sentence description of the item's visual style and key features.\n"
-        f"Respond ONLY with a JSON object containing keys: 'matches_category' (boolean), 'color' (string), 'description' (string)."
+        f"1. Identify the PRIMARY wardrobe or clothing item visible in the image. Ignore the person's identity, body, face, pose, or background. Note: The garment may be worn by a person; being worn by a person must NOT cause rejection.\n"
+        f"2. Determine the specific garment/item type using fashion semantics and set 'detected_item_type' to this specific item type (for example: 'shirt dress', 'maxi dress', 'trench coat', 'button-down shirt', 'running shoes').\n"
+        f"3. Perform semantic category comparison against the target database category '{category_term}':\n"
+        f"   - Set 'matches_category' to true if the detected item belongs to, is a subtype of, is a synonym of, or is semantically compatible with the category '{category_term}' (including legitimate sub-styles, regional/traditional variations, and visually equivalent forms).\n"
+        f"   - Do NOT require exact word matching.\n"
+        f"   - Set 'matches_category' to false ONLY if the detected item fundamentally belongs to a completely different clothing category or is a non-apparel object.\n"
+        f"4. Extract the primary dominant color of the item into 'color'.\n"
+        f"5. Provide a short 1-2 sentence description of the item's visual style and key features into 'description'.\n"
+        f"Respond ONLY with a JSON object containing keys: 'matches_category' (boolean), 'detected_item_type' (string), 'color' (string), 'description' (string)."
     )
 
 
