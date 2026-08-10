@@ -3,11 +3,15 @@ from rest_framework.renderers import JSONRenderer
 
 class StandardRenderer(JSONRenderer):
     def render(self, data, accepted_media_type=None, renderer_context=None):
-        response = renderer_context.get("response")
-        status_code = response.status_code
+        response = renderer_context.get("response") if renderer_context else None
+        status_code = response.status_code if response else 200
+
+        if status_code in (204, 205):
+            return b""
 
         if isinstance(data, dict) and "status" in data and "code" in data:
             return super().render(data, accepted_media_type, renderer_context)
+
 
         is_error = status_code >= 400
 

@@ -16,6 +16,8 @@ DEBUG = os.getenv('DEBUG') == 'True'
 ALLOWED_HOSTS = ['*']
 
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "") #ai
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1") #ai
 
 
 # Application definition
@@ -43,6 +45,7 @@ INSTALLED_APPS = [
     'news',
     'avatars',
     'wardrobe_items_ai',
+    'outfits',
     'django_cleanup.apps.CleanupConfig',
 ]
 

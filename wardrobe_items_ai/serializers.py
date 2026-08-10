@@ -92,21 +92,3 @@ class WardrobeItemSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
-
-
-class ItemAnalysisTriggerSerializer(serializers.Serializer):
-    wardrobe_item_id = serializers.IntegerField(
-        required=False,
-        help_text="ID of the wardrobe item to analyze.",
-    )
-    wardrobe_item = serializers.IntegerField(
-        required=False,
-        help_text="Alias for wardrobe_item_id.",
-    )
-
-    def validate(self, attrs):
-        item_id = attrs.get("wardrobe_item_id") or attrs.get("wardrobe_item")
-        if item_id is None:
-            raise serializers.ValidationError({"wardrobe_item_id": ["This field is required."]})
-        attrs["wardrobe_item_id"] = item_id
-        return attrs

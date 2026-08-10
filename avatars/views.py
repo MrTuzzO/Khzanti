@@ -24,7 +24,7 @@ class AvatarCreateView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        avatar = serializer.save(user=request.user, status=Avatar.JobStatus.PENDING)
+        avatar = serializer.save(user=request.user, is_default=False, status=Avatar.JobStatus.PENDING)
         submit_avatar_job(avatar)
         avatar.refresh_from_db()
         _raise_if_avatar_failed(avatar)
@@ -33,12 +33,29 @@ class AvatarCreateView(generics.CreateAPIView):
         return Response(out_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
+class AvatarDefaultView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AvatarSerializer
+
+    def get_object(self):
+        default_avatar = Avatar.objects.filter(is_default=True).first()
+        if not default_avatar:
+            default_avatar = Avatar.objects.create(
+                user=None,
+                is_default=True,
+                status=Avatar.JobStatus.DONE,
+                style=Avatar.Style.REALISTIC,
+                result_image="avatars/result/default_avatar.png",  #change the path later
+            )
+        return default_avatar
+
+
 class AvatarStatusView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = AvatarSerializer
 
     def get_queryset(self):
-        return Avatar.objects.filter(user=self.request.user)
+        return Avatar.objects.filter(user=self.request.user, is_default=False)
 
     def get_object(self):
         obj = super().get_object()
@@ -52,5 +69,6 @@ class AvatarListView(generics.ListAPIView):
     serializer_class = AvatarSerializer
 
     def get_queryset(self):
-        return Avatar.objects.filter(user=self.request.user)
+        return Avatar.objects.filter(user=self.request.user, is_default=False)
+
 
