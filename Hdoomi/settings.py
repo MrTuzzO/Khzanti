@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'avatars',
     'wardrobe_items_ai',
     'outfits',
+    'model3d',
     'django_cleanup.apps.CleanupConfig',
 ]
 
