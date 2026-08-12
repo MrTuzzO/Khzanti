@@ -2,7 +2,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from avatars.models import Avatar
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
-from .models import JobStatus, OutfitJob
+from .models import JobStatus, OutfitJob, SavedOutfit
 
 
 class TryOnCreateSerializer(serializers.Serializer):
@@ -88,15 +88,22 @@ class OutfitJobSerializer(serializers.ModelSerializer):
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
+    generated_date = serializers.DateField(source="scheduled_date", read_only=True)
 
     class Meta:
         model = OutfitJob
         fields = [
             "id",
+            "generated_date",
+            "trigger_type",
             "status",
             "avatar",
             "wardrobe_items",
             "result_image",
+            "reasoning_title",
+            "reasoning_subtitle",
+            "reasoning_items",
+            "reasoning_note",
             "error_message",
             "created_at",
             "updated_at",
@@ -153,3 +160,109 @@ class TodayOutfitSerializer(serializers.ModelSerializer):
             except Exception:
                 pass
         return None
+
+
+class SavedOutfitCreateSerializer(serializers.ModelSerializer):
+    saved_date = serializers.DateField(
+        source="date",
+        help_text="Date for which the outfit is saved.",
+    )
+    outfit_job_id = serializers.IntegerField(
+        help_text="ID of a completed OutfitJob belonging to the user."
+    )
+
+    class Meta:
+        model = SavedOutfit
+        fields = ["outfit_job_id", "saved_date", "note"]
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and "date" in data and "saved_date" not in data:
+            data = data.copy()
+            data["saved_date"] = data.pop("date")
+        return super().to_internal_value(data)
+
+    def validate_outfit_job_id(self, value):
+        user = self.context["request"].user
+        try:
+            job = OutfitJob.objects.get(pk=value)
+        except OutfitJob.DoesNotExist:
+            raise serializers.ValidationError(f"OutfitJob with ID {value} does not exist.")
+
+        if job.user != user:
+            raise serializers.ValidationError("OutfitJob does not belong to the authenticated user.")
+
+        if job.status != JobStatus.DONE:
+            raise serializers.ValidationError(
+                f"OutfitJob must be completed before saving. Current status: {job.status}."
+            )
+
+        return job
+
+    def validate(self, attrs):
+        attrs["outfit_job"] = attrs.pop("outfit_job_id")
+        return attrs
+
+    def create(self, validated_data):
+        return SavedOutfit.objects.create(**validated_data)
+
+
+class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
+    saved_date = serializers.DateField(
+        source="date",
+        required=False,
+        help_text="Date for which the outfit is saved.",
+    )
+    outfit_job_id = serializers.IntegerField(
+        required=False,
+        help_text="ID of a completed OutfitJob belonging to the user.",
+    )
+
+    class Meta:
+        model = SavedOutfit
+        fields = ["saved_date", "outfit_job_id", "note"]
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and "date" in data and "saved_date" not in data:
+            data = data.copy()
+            data["saved_date"] = data.pop("date")
+        return super().to_internal_value(data)
+
+    def validate_outfit_job_id(self, value):
+        user = self.context["request"].user
+        try:
+            job = OutfitJob.objects.get(pk=value)
+        except OutfitJob.DoesNotExist:
+            raise serializers.ValidationError(f"OutfitJob with ID {value} does not exist.")
+
+        if job.user != user:
+            raise serializers.ValidationError("OutfitJob does not belong to the authenticated user.")
+
+        if job.status != JobStatus.DONE:
+            raise serializers.ValidationError(
+                f"OutfitJob must be completed before saving. Current status: {job.status}."
+            )
+
+        return job
+
+    def validate(self, attrs):
+        if "outfit_job_id" in attrs:
+            attrs["outfit_job"] = attrs.pop("outfit_job_id")
+        return attrs
+
+
+class SavedOutfitSerializer(serializers.ModelSerializer):
+    saved_date = serializers.DateField(source="date", read_only=True)
+    outfit_job = OutfitJobSerializer(read_only=True)
+
+    class Meta:
+        model = SavedOutfit
+        fields = [
+            "id",
+            "saved_date",
+            "note",
+            "outfit_job",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+

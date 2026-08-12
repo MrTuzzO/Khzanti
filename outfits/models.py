@@ -76,3 +76,34 @@ class OutfitJob(models.Model):
     def __str__(self):
         return f"OutfitJob {self.id} - {self.user} ({self.trigger_type}, {self.status})"
 
+
+class SavedOutfit(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="saved_outfits",
+    )
+    outfit_job = models.ForeignKey(
+        "OutfitJob",
+        on_delete=models.CASCADE,
+        related_name="saved_entries",
+    )
+    date = models.DateField(db_index=True)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date"]
+        verbose_name = "Saved Outfit"
+        verbose_name_plural = "Saved Outfits"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "date"],
+                name="unique_saved_outfit_per_user_per_date",
+            )
+        ]
+
+    def __str__(self):
+        return f"SavedOutfit {self.id} - {self.user} on {self.date}"
+

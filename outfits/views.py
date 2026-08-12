@@ -13,10 +13,20 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from datetime import date as date_type
+
 from core.exceptions import ServiceError
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob, TriggerType
-from .serializers import OutfitJobSerializer, OutfitJobStatusSerializer, TodayOutfitSerializer, TryOnCreateSerializer
+from .models import JobStatus, OutfitJob, SavedOutfit, TriggerType
+from .serializers import (
+    OutfitJobSerializer,
+    OutfitJobStatusSerializer,
+    SavedOutfitCreateSerializer,
+    SavedOutfitSerializer,
+    SavedOutfitUpdateSerializer,
+    TodayOutfitSerializer,
+    TryOnCreateSerializer,
+)
 from .services import get_or_create_today_auto_job, submit_try_on_job
 
 logger = logging.getLogger(__name__)
@@ -53,9 +63,20 @@ class AsyncAPIView(APIView):
         return self.response
 
 
-class TryOnCreateView(generics.CreateAPIView):
+class TryOnCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = TryOnCreateSerializer
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return TryOnCreateSerializer
+        return OutfitJobSerializer
+
+    def get_queryset(self):
+        return (
+            OutfitJob.objects.filter(user=self.request.user)
+            .select_related("avatar")
+            .prefetch_related("wardrobe_items")
+        )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={"request": request})
@@ -307,3 +328,90 @@ class TryOnWebhookView(AsyncAPIView):
         logger.info("[OUTFITS WEBHOOK TRY-ON] Successfully completed OutfitJob %s", job.id)
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+class SavedOutfitListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return SavedOutfitCreateSerializer
+        return SavedOutfitSerializer
+
+    def get_queryset(self):
+        qs = (
+            SavedOutfit.objects.filter(user=self.request.user)
+            .select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
+        )
+
+        start_date = self.request.query_params.get("start_date")
+        end_date = self.request.query_params.get("end_date")
+
+        if start_date:
+            try:
+                qs = qs.filter(date__gte=date_type.fromisoformat(start_date))
+            except ValueError:
+                pass
+
+        if end_date:
+            try:
+                qs = qs.filter(date__lte=date_type.fromisoformat(end_date))
+            except ValueError:
+                pass
+
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        read_serializer = SavedOutfitSerializer(
+            SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
+            .get(pk=serializer.instance.pk),
+            context=self.get_serializer_context(),
+        )
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return SavedOutfitUpdateSerializer
+        return SavedOutfitSerializer
+
+    def get_queryset(self):
+        return (
+            SavedOutfit.objects.filter(user=self.request.user)
+            .select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        instance.refresh_from_db()
+        read_serializer = SavedOutfitSerializer(
+            SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
+            .get(pk=instance.pk),
+            context=self.get_serializer_context(),
+        )
+        return Response(read_serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {"detail": "Saved outfit deleted successfully."},
+            status=status.HTTP_200_OK,
+        )

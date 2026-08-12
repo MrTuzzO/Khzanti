@@ -9,18 +9,44 @@ from .models import Avatar
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_CLOTHING_PROMPTS = {
+    "male": (
+        "Default Clothing:\n"
+        "Formal professional male attire consisting of a formal shirt, a black formal suit, "
+        "professional tailored trousers, and a clean, polished appearance. "
+        "Avoid casual T-shirts, shorts, overly fashionable clothing, or distracting patterns."
+    ),
+    "female": (
+        "Default Clothing:\n"
+        "Modest, elegant professional female attire suitable for a Saudi/Arabian corporate environment: "
+        "a long, loose-fitting formal dress or abaya-style professional outfit with full-length sleeves, "
+        "a high covered neckline, full-length coverage, and a loose, non-body-hugging silhouette. "
+        "Styling in neutral or dark professional colors such as black, navy, charcoal, beige, or dark brown with minimal accessories. "
+        "Do NOT generate tight-fitting trousersuits, body-hugging dresses, short skirts, low necklines, exposed arms/shoulders, "
+        "sheer fabrics, or revealing silhouettes. Do NOT automatically add a headscarf or hijab unless present in Image 1 or profile."
+    ),
+    "default": (
+        "Default Clothing:\n"
+        "Modest, elegant formal professional attire with full coverage, loose non-body-hugging fit, and clean, polished styling."
+    ),
+}
+
 AVATAR_STYLE_PROMPTS = {
     Avatar.Style.REALISTIC: (
-        "Keep the exact same facial features as image 1 — same eyes, nose shape, "
-        "jawline, skin tone, hairstyle. Render the person full-body, standing, "
-        "front-facing, arms relaxed, in a semi-realistic 3D rendered character style "
-        "with soft studio lighting, against a plain light gray background. Casual modern outfit."
+        "Identity & Facial Characteristics:\n"
+        "Keep the exact same facial features as Image 1 — same eyes, nose shape, "
+        "jawline, skin tone, and hairstyle.\n\n"
+        "Visual Style:\n"
+        "Semi-realistic 3D rendered character style, full-body, standing, front-facing, "
+        "arms relaxed, with soft studio lighting against a plain light gray background."
     ),
     Avatar.Style.CARTOON: (
-        "Preserve the person's identity and recognizable facial characteristics from image 1 — "
-        "same hairstyle, skin tone, and distinct facial features. Transform the rendering into a "
-        "polished 3D cartoon character style. Full-body, standing, front-facing, arms relaxed, "
-        "in a casual modern outfit, against a plain light gray background with soft studio lighting."
+        "Identity & Facial Characteristics:\n"
+        "Preserve the person's identity and recognizable facial characteristics from Image 1 — "
+        "same hairstyle, skin tone, eyes, nose, and distinct facial features.\n\n"
+        "Visual Style:\n"
+        "Polished 3D cartoon character style, full-body, standing, front-facing, "
+        "arms relaxed, with soft studio lighting against a plain light gray background."
     ),
 }
 
@@ -29,29 +55,85 @@ FAL_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
     """
-    Constructs the fal.ai prompt based on the selected avatar style
-    and available non-None user profile constraints.
+    Constructs a structured fal.ai prompt that clearly separates:
+    1. Identity / Physical Characteristics (Image 1 reference)
+    2. Body / Proportions (visible height, build, weight distribution + profile attributes)
+    3. Appearance (skin tone, hair characteristics)
+    4. Default Clothing (gender-specific formal/modest attire)
+    5. Visual Style (semi-realistic or 3D cartoon)
     """
-    base_prompt = AVATAR_STYLE_PROMPTS.get(style, AVATAR_STYLE_PROMPTS[Avatar.Style.REALISTIC])
+    profile_constraints = profile_constraints or {}
+    gender_raw = str(profile_constraints.get("gender") or "").strip().lower()
 
-    if not profile_constraints:
-        return base_prompt
+    if gender_raw in ("male", "man", "boy", "m"):
+        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["male"]
+    elif gender_raw in ("female", "woman", "girl", "f"):
+        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["female"]
+    else:
+        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["default"]
 
-    lines = []
+    if style == Avatar.Style.CARTOON:
+        identity_prompt = (
+            "Identity & Physical Characteristics:\n"
+            "Preserve the person's identity and recognizable facial characteristics from Image 1 — "
+            "same eyes, nose, jawline, skin tone, hairstyle, and distinct facial features."
+        )
+        style_prompt = (
+            "Visual Style:\n"
+            "Polished 3D cartoon character style, full-body, standing, front-facing, "
+            "arms relaxed, with soft studio lighting against a plain light gray background."
+        )
+    else:
+        identity_prompt = (
+            "Identity & Physical Characteristics:\n"
+            "Keep the exact same facial features as Image 1 — same eyes, nose shape, "
+            "jawline, skin tone, hairstyle, and facial proportions."
+        )
+        style_prompt = (
+            "Visual Style:\n"
+            "Semi-realistic 3D rendered character style, full-body, standing, front-facing, "
+            "arms relaxed, with soft studio lighting against a plain light gray background."
+        )
+
+    body_lines = [
+        "Body & Proportions:\n"
+        "Treat Image 1 as the primary visual source for body characteristics, accurately "
+        "preserving visible height, body build, weight distribution, overall body shape, and proportions."
+    ]
+
+    profile_lines = []
     if profile_constraints.get("gender"):
-        lines.append(f"Gender: {profile_constraints['gender']}")
+        profile_lines.append(f"Gender: {profile_constraints['gender']}")
     if profile_constraints.get("height"):
-        lines.append(f"Height: {profile_constraints['height']}")
+        profile_lines.append(f"Height: {profile_constraints['height']}")
     if profile_constraints.get("age"):
-        lines.append(f"Age: {profile_constraints['age']}")
+        profile_lines.append(f"Age: {profile_constraints['age']}")
     if profile_constraints.get("body_type"):
-        lines.append(f"Body type: {profile_constraints['body_type']}")
+        profile_lines.append(f"Body build/type: {profile_constraints['body_type']}")
+    elif profile_constraints.get("build"):
+        profile_lines.append(f"Body build/type: {profile_constraints['build']}")
+    if profile_constraints.get("weight"):
+        profile_lines.append(f"Weight: {profile_constraints['weight']}")
 
-    if lines:
-        profile_text = "\nProfile information:\n" + "\n".join(lines)
-        return f"{base_prompt}\n{profile_text}"
+    if profile_lines:
+        body_lines.append("User Profile Guidance (reinforcing reference image):\n- " + "\n- ".join(profile_lines))
 
-    return base_prompt
+    body_prompt = "\n".join(body_lines)
+
+    appearance_prompt = (
+        "Appearance:\n"
+        "Retain exact skin tone, hair characteristics, hair color, texture, and all clearly visible physical characteristics from Image 1."
+    )
+
+    sections = [
+        identity_prompt,
+        body_prompt,
+        appearance_prompt,
+        clothing_prompt,
+        style_prompt,
+    ]
+
+    return "\n\n".join(sections)
 
 
 def _friendly_error_message(raw_error: str) -> str:
@@ -72,7 +154,10 @@ def submit_avatar_job(avatar: Avatar) -> None:
     On submission failure, updates status to 'failed' with friendly error details.
     """
     try:
-        selfie_url = avatar.source_photo.url
+        try:
+            selfie_url = avatar.source_photo.url if avatar.source_photo else ""
+        except Exception:
+            selfie_url = f"http://testserver/{avatar.source_photo.name}" if avatar.source_photo else ""
         profile_constraints = get_profile_constraints(avatar.user)
         prompt = build_avatar_prompt(avatar.style, profile_constraints)
 
