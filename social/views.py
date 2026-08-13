@@ -19,6 +19,9 @@ def annotated_users(viewer):
     return User.objects.filter(is_active=True).annotate(
         followers_count=Count("followers", distinct=True),
         following_count=Count("following", distinct=True),
+        shared_outfits_count=Count(
+            "saved_outfits", filter=Q(saved_outfits__is_shared=True), distinct=True
+        ),
         is_following=Exists(Follow.objects.filter(follower_id=viewer.id, following_id=OuterRef("pk"))),
     )
 

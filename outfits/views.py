@@ -5,6 +5,7 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.http import Http404
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 import requests
@@ -15,12 +16,15 @@ from rest_framework.views import APIView
 
 from datetime import date as date_type
 
+from accounts.models import User
 from core.exceptions import ServiceError
+from core.pagination import StandardPagination
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
 from .models import JobStatus, OutfitJob, SavedOutfit, TriggerType
 from .serializers import (
     OutfitJobSerializer,
     OutfitJobStatusSerializer,
+    PublicSavedOutfitSerializer,
     SavedOutfitCreateSerializer,
     SavedOutfitSerializer,
     SavedOutfitUpdateSerializer,
@@ -414,4 +418,18 @@ class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Response(
             {"detail": "Saved outfit deleted successfully."},
             status=status.HTTP_200_OK,
+        )
+
+
+class PublicSavedOutfitListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PublicSavedOutfitSerializer
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        get_object_or_404(User, username=self.kwargs["username"], is_active=True)
+        return (
+            SavedOutfit.objects.filter(user__username=self.kwargs["username"], is_shared=True)
+            .select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
         )

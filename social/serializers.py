@@ -12,6 +12,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
 
     followers_count = serializers.IntegerField(read_only=True, default=0)
     following_count = serializers.IntegerField(read_only=True, default=0)
+    shared_outfits_count = serializers.IntegerField(read_only=True, default=0)
     is_following = serializers.BooleanField(read_only=True, default=False)
 
     class Meta:
@@ -23,6 +24,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
             "avatar_url",
             "followers_count",
             "following_count",
+            "shared_outfits_count",
             "is_following",
         )
         read_only_fields = fields

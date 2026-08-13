@@ -173,7 +173,8 @@ class SavedOutfitCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SavedOutfit
-        fields = ["outfit_job_id", "saved_date", "note"]
+        fields = ["outfit_job_id", "saved_date", "note", "is_shared"]
+        extra_kwargs = {"is_shared": {"required": False}}
 
     def to_internal_value(self, data):
         if isinstance(data, dict) and "date" in data and "saved_date" not in data:
@@ -219,7 +220,7 @@ class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SavedOutfit
-        fields = ["saved_date", "outfit_job_id", "note"]
+        fields = ["saved_date", "outfit_job_id", "note", "is_shared"]
 
     def to_internal_value(self, data):
         if isinstance(data, dict) and "date" in data and "saved_date" not in data:
@@ -260,9 +261,20 @@ class SavedOutfitSerializer(serializers.ModelSerializer):
             "id",
             "saved_date",
             "note",
+            "is_shared",
             "outfit_job",
             "created_at",
             "updated_at",
         ]
+        read_only_fields = fields
+
+
+class PublicSavedOutfitSerializer(serializers.ModelSerializer):
+    saved_date = serializers.DateField(source="date", read_only=True)
+    outfit_job = OutfitJobSerializer(read_only=True)
+
+    class Meta:
+        model = SavedOutfit
+        fields = ["id", "saved_date", "note", "outfit_job", "created_at"]
         read_only_fields = fields
 
