@@ -1,8 +1,11 @@
+from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from avatars.models import Avatar
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
-from .models import JobStatus, OutfitJob, SavedOutfit
+from .models import JobStatus, OutfitJob, OutfitRating, SavedOutfit
+
+User = get_user_model()
 
 
 class TryOnCreateSerializer(serializers.Serializer):
@@ -269,12 +272,73 @@ class SavedOutfitSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+RATING_CATEGORIES = ["color_harmony", "trendy", "overall_matching", "accessories"]
+
+
+class OutfitRatingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OutfitRating
+        fields = RATING_CATEGORIES
+
+
 class PublicSavedOutfitSerializer(serializers.ModelSerializer):
     saved_date = serializers.DateField(source="date", read_only=True)
     outfit_job = OutfitJobSerializer(read_only=True)
+    ratings_count = serializers.IntegerField(read_only=True, default=0)
+    average_rating = serializers.SerializerMethodField()
+    rating_breakdown = serializers.SerializerMethodField()
 
     class Meta:
         model = SavedOutfit
-        fields = ["id", "saved_date", "note", "outfit_job", "created_at"]
+        fields = [
+            "id",
+            "saved_date",
+            "note",
+            "outfit_job",
+            "ratings_count",
+            "average_rating",
+            "rating_breakdown",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def _category_averages(self, obj):
+        return {field: getattr(obj, f"avg_{field}", None) for field in RATING_CATEGORIES}
+
+    @extend_schema_field(serializers.FloatField(allow_null=True))
+    def get_average_rating(self, obj):
+        values = [v for v in self._category_averages(obj).values() if v is not None]
+        if not values:
+            return None
+        return round(sum(values) / len(values), 1)
+
+    @extend_schema_field(serializers.DictField(child=serializers.FloatField(allow_null=True)))
+    def get_rating_breakdown(self, obj):
+        return {
+            field: (round(value, 1) if value is not None else None)
+            for field, value in self._category_averages(obj).items()
+        }
+
+
+class RaterSerializer(serializers.ModelSerializer):
+    """Small user card identifying who submitted a rating."""
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "name", "avatar_url"]
+        read_only_fields = fields
+
+
+class SavedOutfitRatingDetailSerializer(serializers.ModelSerializer):
+    """
+    One individual rating with who gave it — only ever shown to the outfit's
+    owner (see SavedOutfitRatingsListView), never on the public profile.
+    """
+
+    rater = RaterSerializer(read_only=True)
+
+    class Meta:
+        model = OutfitRating
+        fields = ["id", "rater", *RATING_CATEGORIES, "created_at"]
         read_only_fields = fields
 

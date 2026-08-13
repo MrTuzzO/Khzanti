@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import OutfitJob, SavedOutfit
+from .models import OutfitJob, OutfitRating, SavedOutfit
 
 
 @admin.register(OutfitJob)
@@ -18,4 +18,12 @@ class SavedOutfitAdmin(admin.ModelAdmin):
     search_fields = ["user__email", "id"]
     readonly_fields = ["created_at", "updated_at"]
     raw_id_fields = ["outfit_job"]
+
+
+@admin.register(OutfitRating)
+class OutfitRatingAdmin(admin.ModelAdmin):
+    list_display = ["id", "saved_outfit", "rater", "color_harmony", "trendy", "overall_matching", "accessories", "created_at"]
+    search_fields = ["rater__email", "saved_outfit__user__email"]
+    readonly_fields = ["created_at", "updated_at"]
+    raw_id_fields = ["saved_outfit", "rater"]
 
