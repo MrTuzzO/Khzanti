@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -114,4 +115,39 @@ class SavedOutfit(models.Model):
 
     def __str__(self):
         return f"SavedOutfit {self.id} - {self.user} on {self.date}"
+
+
+class OutfitRating(models.Model):
+    RATING_VALIDATORS = [MinValueValidator(0), MaxValueValidator(10)]
+
+    saved_outfit = models.ForeignKey(
+        SavedOutfit,
+        on_delete=models.CASCADE,
+        related_name="ratings",
+    )
+    rater = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="outfit_ratings",
+    )
+    color_harmony = models.PositiveSmallIntegerField(validators=RATING_VALIDATORS)
+    trendy = models.PositiveSmallIntegerField(validators=RATING_VALIDATORS)
+    overall_matching = models.PositiveSmallIntegerField(validators=RATING_VALIDATORS)
+    accessories = models.PositiveSmallIntegerField(validators=RATING_VALIDATORS)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Outfit Rating"
+        verbose_name_plural = "Outfit Ratings"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["saved_outfit", "rater"],
+                name="unique_rating_per_user_per_outfit",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Rating {self.id} by {self.rater_id} on SavedOutfit {self.saved_outfit_id}"
 

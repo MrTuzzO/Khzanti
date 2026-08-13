@@ -386,19 +386,6 @@ UNFOLD = {
                 ],
             },
             {
-                "title": _("Social"),
-                "separator": True,
-                "collapsible": False,
-                "items": [
-                    {
-                        "title": _("Follows"),
-                        "icon": "group_add",
-                        "link": reverse_lazy("admin:social_follow_changelist"),
-                        "permission": _perm("social.view_follow"),
-                    },
-                ],
-            },
-            {
                 "title": _("Wardrobe"),
                 "separator": True,
                 "collapsible": False,

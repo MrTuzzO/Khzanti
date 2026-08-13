@@ -4,12 +4,14 @@ import logging
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db.models import Avg, Count
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 import requests
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,12 +22,15 @@ from accounts.models import User
 from core.exceptions import ServiceError
 from core.pagination import StandardPagination
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob, SavedOutfit, TriggerType
+from .models import JobStatus, OutfitJob, OutfitRating, SavedOutfit, TriggerType
 from .serializers import (
     OutfitJobSerializer,
     OutfitJobStatusSerializer,
+    OutfitRatingSerializer,
     PublicSavedOutfitSerializer,
+    RATING_CATEGORIES,
     SavedOutfitCreateSerializer,
+    SavedOutfitRatingDetailSerializer,
     SavedOutfitSerializer,
     SavedOutfitUpdateSerializer,
     TodayOutfitSerializer,
@@ -421,15 +426,90 @@ class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
         )
 
 
+def with_rating_aggregates(queryset):
+    """
+    Annotate a SavedOutfit queryset with ratings_count and per-category averages
+    (avg_<category>) in one query, so listing shared outfits stays N+1-free.
+    Public-facing only — never exposes who rated what (see
+    SavedOutfitRatingsListView for the owner-only per-rater breakdown).
+    """
+    annotations = {"ratings_count": Count("ratings", distinct=True)}
+    for field in RATING_CATEGORIES:
+        annotations[f"avg_{field}"] = Avg(f"ratings__{field}")
+    return queryset.annotate(**annotations)
+
+
 class PublicSavedOutfitListView(generics.ListAPIView):
+    """
+    GET /api/v1/outfits/public/<username>/ - a user's saved outfits that they've
+    marked as shared (is_shared=True), for display on their public profile.
+    Shows only the aggregate rating (count/average/breakdown) — not who rated it.
+    """
+
     permission_classes = [IsAuthenticated]
     serializer_class = PublicSavedOutfitSerializer
     pagination_class = StandardPagination
 
     def get_queryset(self):
         get_object_or_404(User, username=self.kwargs["username"], is_active=True)
-        return (
+        qs = (
             SavedOutfit.objects.filter(user__username=self.kwargs["username"], is_shared=True)
             .select_related("outfit_job", "outfit_job__avatar")
             .prefetch_related("outfit_job__wardrobe_items")
+            .order_by("-date")
+        )
+        return with_rating_aggregates(qs)
+
+
+class RateSavedOutfitView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _get_ratable_outfit(self, request, pk):
+        outfit = get_object_or_404(SavedOutfit, pk=pk, is_shared=True)
+        if outfit.user_id == request.user.id:
+            raise ValidationError({"detail": "You cannot rate your own outfit."})
+        return outfit
+
+    @extend_schema(request=OutfitRatingSerializer, responses={200: OutfitRatingSerializer})
+    def post(self, request, pk):
+        outfit = self._get_ratable_outfit(request, pk)
+
+        serializer = OutfitRatingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        rating, created = OutfitRating.objects.update_or_create(
+            saved_outfit=outfit,
+            rater=request.user,
+            defaults=serializer.validated_data,
+        )
+
+        return Response(
+            OutfitRatingSerializer(rating).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request, pk):
+        outfit = self._get_ratable_outfit(request, pk)
+        OutfitRating.objects.filter(saved_outfit=outfit, rater=request.user).delete()
+        return Response({"detail": "Rating removed."}, status=status.HTTP_200_OK)
+
+
+class SavedOutfitRatingsListView(generics.ListAPIView):
+    """
+    GET /api/v1/outfits/saved/<pk>/ratings/ - who rated this outfit and what they
+    gave. Owner-only: strangers only ever see the aggregate via the public
+    profile endpoint, never individual raters' identities.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = SavedOutfitRatingDetailSerializer
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        get_object_or_404(SavedOutfit, pk=self.kwargs["pk"], user=self.request.user)
+        return (
+            OutfitRating.objects.filter(saved_outfit_id=self.kwargs["pk"])
+            .select_related("rater")
+            .order_by("-created_at")
         )
