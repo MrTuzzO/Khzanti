@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    PublicSavedOutfitListView,
     SavedOutfitDetailView,
     SavedOutfitListCreateView,
     TodayOutfitResetView,
@@ -19,5 +20,6 @@ urlpatterns = [
     path("try-on/webhook/", TryOnWebhookView.as_view(), name="try-on-webhook"),
     path("saved/", SavedOutfitListCreateView.as_view(), name="saved-outfit-list-create"),
     path("saved/<int:pk>/", SavedOutfitDetailView.as_view(), name="saved-outfit-detail"),
+    path("public/<str:username>/", PublicSavedOutfitListView.as_view(), name="public-saved-outfits"),
 ]
 

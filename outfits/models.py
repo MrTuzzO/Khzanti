@@ -90,6 +90,11 @@ class SavedOutfit(models.Model):
     )
     date = models.DateField(db_index=True)
     note = models.TextField(blank=True)
+    is_shared = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="When on, this saved outfit is visible on the user's public profile.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -102,6 +107,9 @@ class SavedOutfit(models.Model):
                 fields=["user", "date"],
                 name="unique_saved_outfit_per_user_per_date",
             )
+        ]
+        indexes = [
+            models.Index(fields=["user", "is_shared", "-date"]),
         ]
 
     def __str__(self):
