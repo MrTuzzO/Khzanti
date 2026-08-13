@@ -5,6 +5,41 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
+
+
+class Aesthetic(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    image = models.ImageField(upload_to="aesthetics/")
+    order = models.PositiveSmallIntegerField(default=0, help_text="Controls display order (lower first).")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "name"]
+        verbose_name = "Aesthetic"
+        verbose_name_plural = "Aesthetics"
+
+    def __str__(self):
+        return self.name
+
+
+class Gender(models.TextChoices):
+    MALE = "male", _("Male")
+    FEMALE = "female", _("Female")
+    OTHER = "other", _("Other")
+
+
+class BodyType(models.TextChoices):
+    SLIM = "slim", _("Slim")
+    ATHLETIC = "athletic", _("Athletic")
+    AVERAGE = "average", _("Average")
+    CURVY = "curvy", _("Curvy")
+    PLUS_SIZE = "plus_size", _("Plus Size")
+
+
+MAX_AESTHETICS_PER_PROFILE = 3
 
 
 class UserManager(BaseUserManager):
@@ -52,6 +87,26 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def avatar_url(self):
         return self.profile_image.url if self.profile_image else None
+
+
+class CustomerProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="customer_profile")
+    age = models.PositiveSmallIntegerField(null=True, blank=True)
+    gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
+    height = models.PositiveSmallIntegerField(null=True, blank=True, help_text="Height in centimeters.")
+    body_type = models.CharField(max_length=20, choices=BodyType.choices, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    aesthetics = models.ManyToManyField(Aesthetic, related_name="customer_profiles", blank=True)
+    is_completed = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Set once the user finishes the post-signup 'Complete Profile' step.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} profile"
 
 
 class OTP(models.Model):

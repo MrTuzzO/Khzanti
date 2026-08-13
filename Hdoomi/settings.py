@@ -361,6 +361,12 @@ UNFOLD = {
                         "permission": _perm("accounts.view_user"),
                     },
                     {
+                        "title": _("Aesthetics"),
+                        "icon": "styler",
+                        "link": reverse_lazy("admin:accounts_aesthetic_changelist"),
+                        "permission": _perm("accounts.view_aesthetic"),
+                    },
+                    {
                         "title": _("OTP Codes"),
                         "icon": "pin",
                         "link": reverse_lazy("admin:accounts_otp_changelist"),
