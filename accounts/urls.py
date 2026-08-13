@@ -19,5 +19,7 @@ urlpatterns = [
     path("delete-account/", views.DeleteAccountView.as_view(), name="auth-delete-account"),
 
     path("profile/", views.ProfileView.as_view(), name="auth-profile"),
+    path("profile/complete/", views.CompleteProfileView.as_view(), name="auth-profile-complete"),
+    path("aesthetics/", views.AestheticListView.as_view(), name="auth-aesthetics"),
     path("change-password/", views.ChangePasswordView.as_view(), name="auth-change-password"),
 ]

@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'wardrobe_items_ai',
     'outfits',
     'model3d',
+    'social',
     'django_cleanup.apps.CleanupConfig',
 ]
 
@@ -361,6 +362,12 @@ UNFOLD = {
                         "permission": _perm("accounts.view_user"),
                     },
                     {
+                        "title": _("Aesthetics"),
+                        "icon": "styler",
+                        "link": reverse_lazy("admin:accounts_aesthetic_changelist"),
+                        "permission": _perm("accounts.view_aesthetic"),
+                    },
+                    {
                         "title": _("OTP Codes"),
                         "icon": "pin",
                         "link": reverse_lazy("admin:accounts_otp_changelist"),
@@ -375,6 +382,19 @@ UNFOLD = {
                         "permission": _perm(
                             "accounts.view_passwordresettoken"
                         ),
+                    },
+                ],
+            },
+            {
+                "title": _("Social"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("Follows"),
+                        "icon": "group_add",
+                        "link": reverse_lazy("admin:social_follow_changelist"),
+                        "permission": _perm("social.view_follow"),
                     },
                 ],
             },

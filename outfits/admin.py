@@ -13,8 +13,8 @@ class OutfitJobAdmin(admin.ModelAdmin):
 
 @admin.register(SavedOutfit)
 class SavedOutfitAdmin(admin.ModelAdmin):
-    list_display = ["id", "user", "outfit_job", "date", "created_at"]
-    list_filter = ["date", "created_at"]
+    list_display = ["id", "user", "outfit_job", "date", "is_shared", "created_at"]
+    list_filter = ["is_shared", "date", "created_at"]
     search_fields = ["user__email", "id"]
     readonly_fields = ["created_at", "updated_at"]
     raw_id_fields = ["outfit_job"]

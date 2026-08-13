@@ -16,6 +16,7 @@ urlpatterns = [
     path('api/v1/wardrobe-items-ai/', include('wardrobe_items_ai.urls')),
     path('api/v1/outfits/', include('outfits.urls')),
     path('api/v1/model3d/', include('model3d.urls')),
+    path('api/v1/social/', include('social.urls')),
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/v1/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]

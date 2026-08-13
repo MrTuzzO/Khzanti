@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import transaction
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, inline_serializer
-from rest_framework import status
+from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -10,9 +10,11 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import OTP, PasswordResetToken, User
+from .models import Aesthetic, CustomerProfile, OTP, PasswordResetToken, User
 from .serializers import (
+    AestheticSerializer,
     ChangePasswordSerializer,
+    CompleteProfileSerializer,
     DeleteAccountSerializer,
     ForgotPasswordSerializer,
     LoginSerializer,
@@ -237,6 +239,44 @@ class ProfileView(APIView):
         user = serializer.save()
 
         return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class AestheticListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AestheticSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Aesthetic.objects.filter(is_active=True)
+
+
+class CompleteProfileView(APIView):
+    """Get/update the "Complete Profile" step data collected after signup."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        profile, _ = CustomerProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+    @extend_schema(responses={200: CompleteProfileSerializer})
+    def get(self, request):
+        return Response(CompleteProfileSerializer(self.get_object()).data, status=status.HTTP_200_OK)
+
+    @extend_schema(request=CompleteProfileSerializer, responses={200: CompleteProfileSerializer})
+    def patch(self, request):
+        serializer = CompleteProfileSerializer(self.get_object(), data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save()
+
+        return Response(
+            {
+                "detail": "Profile updated successfully.",
+                "is_profile_completed": profile.is_completed,
+                "profile": CompleteProfileSerializer(profile).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ChangePasswordView(APIView):

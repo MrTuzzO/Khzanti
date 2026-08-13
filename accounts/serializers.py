@@ -4,15 +4,20 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import OTP, PasswordResetToken, User
+from .models import MAX_AESTHETICS_PER_PROFILE, Aesthetic, CustomerProfile, OTP, PasswordResetToken, User
 from .utils import send_otp_email
 
 
 class UserSerializer(serializers.ModelSerializer):
+    is_profile_completed = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ("id", "name", "email", "avatar_url", "is_email_verified", "created_at")
+        fields = ("id", "username", "name", "email", "avatar_url", "is_email_verified", "is_profile_completed", "created_at")
         read_only_fields = fields
+    
+    def get_is_profile_completed(self, obj):
+        return getattr(getattr(obj, "customer_profile", None), "is_completed", False)
 
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
@@ -23,6 +28,59 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
             "name": {"required": False},
             "profile_image": {"required": False},
         }
+
+
+class AestheticSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Aesthetic
+        fields = ("id", "name", "image")
+        read_only_fields = fields
+
+
+class CompleteProfileSerializer(serializers.ModelSerializer):
+    aesthetics = serializers.PrimaryKeyRelatedField(
+        queryset=Aesthetic.objects.filter(is_active=True),
+        many=True,
+        required=False,
+    )
+
+    class Meta:
+        model = CustomerProfile
+        fields = ("age", "gender", "height", "body_type", "country", "aesthetics")
+        extra_kwargs = {
+            "age": {"required": False},
+            "gender": {"required": False},
+            "height": {"required": False},
+            "body_type": {"required": False},
+            "country": {"required": False},
+        }
+
+    def validate_aesthetics(self, value):
+        if len(value) > MAX_AESTHETICS_PER_PROFILE:
+            raise serializers.ValidationError(f"Select up to {MAX_AESTHETICS_PER_PROFILE} aesthetics.")
+        return value
+
+    def update(self, instance, validated_data):
+        aesthetics = validated_data.pop("aesthetics", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        # Mark complete once the required fields are present.
+        instance.is_completed = all(
+            [
+                instance.age,
+                instance.gender,
+                instance.height,
+                instance.body_type,
+                instance.country,
+            ]
+        )
+        instance.save()
+
+        if aesthetics is not None:
+            instance.aesthetics.set(aesthetics)
+
+        return instance
 
 
 class ChangePasswordSerializer(serializers.Serializer):
