@@ -1,4 +1,5 @@
 import hashlib
+import re
 import secrets
 from datetime import timedelta
 from django.conf import settings
@@ -47,10 +48,20 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError("Email is required.")
         email = self.normalize_email(email)
+        extra_fields.setdefault("username", self._generate_unique_username(email))
         user = self.model(email=email, name=name, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
+
+    def _generate_unique_username(self, email):
+        base = re.sub(r"[^a-z0-9_]", "", email.split("@")[0].lower())[:25] or "user"
+        username = base
+        suffix = 0
+        while self.model.objects.filter(username=username).exists():
+            suffix += 1
+            username = f"{base}{suffix}"
+        return username
 
     def create_superuser(self, email, name, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
@@ -63,6 +74,7 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=150)
     email = models.EmailField(unique=True)
+    username = models.CharField(max_length=30, unique=True, db_index=True)
     profile_image = models.ImageField(upload_to="profile_images/", null=True, blank=True)
     is_email_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
