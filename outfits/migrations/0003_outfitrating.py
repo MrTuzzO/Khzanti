@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('outfits', '0002_savedoutfit_is_shared_and_more'),
+        ('outfits', '0005_merge_20260813_1015'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
