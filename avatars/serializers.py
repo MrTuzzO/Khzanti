@@ -1,3 +1,5 @@
+import os
+import uuid
 from rest_framework import serializers
 from .models import Avatar
 
@@ -14,6 +16,16 @@ class AvatarCreateSerializer(serializers.ModelSerializer):
         model = Avatar
         fields = ["id", "source_photo", "style"]
         read_only_fields = ["id"]
+
+    def validate_source_photo(self, value):
+        # The DB column for source_photo is varchar(100) and upload_to
+        # prepends "avatars/source/" (15 chars), so long original filenames
+        # (common from phone cameras/WhatsApp) can overflow it and raise a
+        # DataError on save. Replace the name with a short unique one,
+        # keeping the original extension.
+        ext = os.path.splitext(value.name)[1].lower()
+        value.name = f"{uuid.uuid4().hex}{ext}"
+        return value
 
 
 
