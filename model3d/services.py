@@ -51,12 +51,12 @@ def get_outfit_job_for_user(user, outfit_job_id: int) -> OutfitJob:
         logger.warning("[3D CONVERSION] OutfitJob %s status is failed.", outfit_job.id)
         raise ValidationError("Cannot convert a failed outfit job.")
 
-    if outfit_job.status != OutfitJobStatus.DONE or not outfit_job.result_image:
+    if outfit_job.status != OutfitJobStatus.DONE or not outfit_job.display_result_image:
         logger.warning(
-            "[3D CONVERSION] OutfitJob %s lacks completed image (status=%s, result_image=%s)",
+            "[3D CONVERSION] OutfitJob %s lacks completed image (status=%s, display_result_image=%s)",
             outfit_job.id,
             outfit_job.status,
-            bool(outfit_job.result_image),
+            bool(outfit_job.display_result_image),
         )
         raise ValidationError("Outfit job does not have a completed image for 3D conversion.")
 
@@ -108,7 +108,7 @@ def submit_3d_conversion(user, outfit_job_id: int) -> tuple[ThreeDConversion, bo
     base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
     webhook_url = f"{base_url}/api/v1/model3d/webhook/"
 
-    image_url = outfit_job.result_image.url
+    image_url = outfit_job.display_result_image
 
     logger.info("[3D CONVERSION] Submitting image to fal.ai Hunyuan 3D v3.1 Pro")
 
