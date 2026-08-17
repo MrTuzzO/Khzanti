@@ -223,3 +223,42 @@ def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     return analysis
 
 
+def save_wardrobe_item_to_cloudinary(analysis: ItemAnalysis) -> ItemAnalysis:
+    """
+    Explicitly downloads the AI-processed background-removed image from fal.ai CDN URL and uploads it to Cloudinary storage.
+    Idempotent: if already saved, returns immediately without re-uploading.
+    """
+    if analysis.is_saved:
+        return analysis
+
+    url_to_download = analysis.fal_cdn_url or (analysis.processed_image.url if analysis.processed_image else "")
+    if not url_to_download:
+        from core.exceptions import ServiceError
+        raise ServiceError(
+            detail="Wardrobe item does not have a valid processed image to save.",
+            status_code=400,
+        )
+
+    try:
+        img_resp = requests.get(url_to_download, timeout=30)
+        img_resp.raise_for_status()
+
+        filename = f"processed_item_{analysis.wardrobe_item_id}.png"
+        analysis.processed_image.save(filename, ContentFile(img_resp.content), save=False)
+        analysis.is_saved = True
+        analysis.save(update_fields=["processed_image", "is_saved", "updated_at"])
+    except Exception as exc:
+        from core.exceptions import ServiceError
+        if isinstance(exc, ServiceError):
+            raise exc
+        raw_error = str(exc)
+        logger.error("ItemAnalysis %s save to Cloudinary failed: %s", analysis.id, raw_error, exc_info=True)
+        raise ServiceError(
+            detail="Failed to save processed wardrobe item image. Please try again later.",
+            debug_detail=raw_error,
+            status_code=502,
+        )
+
+    return analysis
+
+
