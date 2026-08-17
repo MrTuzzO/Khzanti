@@ -16,7 +16,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "name", "email", "avatar_url", "is_email_verified", "is_profile_completed", "created_at")
         read_only_fields = fields
     
-    def get_is_profile_completed(self, obj):
+    def get_is_profile_completed(self, obj) -> bool:
         return getattr(getattr(obj, "customer_profile", None), "is_completed", False)
 
 
