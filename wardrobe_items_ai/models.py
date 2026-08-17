@@ -64,6 +64,7 @@ class ItemAnalysis(models.Model):
         blank=True,
     )
     fal_cdn_url = models.URLField(max_length=1024, blank=True)
+    is_saved = models.BooleanField(default=False, db_index=True)
     color = models.CharField(max_length=100, blank=True)
     description = models.TextField(blank=True)
     fal_request_id_bg_removal = models.CharField(max_length=100, blank=True)
