@@ -220,15 +220,12 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
             if not image_url:
                 raise Exception(f"No output image URL found in fal.ai result: {res}")
 
-            img_resp = requests.get(image_url, timeout=30)
-            img_resp.raise_for_status()
-
-            filename = f"avatar_{avatar.id}.png"
-            avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
+            avatar.fal_cdn_url = image_url
             avatar.status = Avatar.JobStatus.DONE
+            avatar.is_saved = False
             avatar.error_message = ""
             avatar.internal_error_detail = ""
-            avatar.save()
+            avatar.save(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
     except Exception as exc:
         raw_error = str(exc)
         logger.error("Avatar job %s status sync failed: %s", avatar.id, raw_error, exc_info=True)
@@ -236,5 +233,44 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
         avatar.internal_error_detail = raw_error
         avatar.error_message = _friendly_error_message(raw_error)
         avatar.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
+    return avatar
+
+
+def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
+    """
+    Explicitly downloads the generated avatar from fal.ai CDN URL and uploads it to Cloudinary storage.
+    Idempotent: if already saved, returns immediately without re-uploading.
+    """
+    if avatar.is_saved:
+        return avatar
+
+    url_to_download = avatar.fal_cdn_url or (avatar.result_image.url if avatar.result_image else "")
+    if not url_to_download:
+        from core.exceptions import ServiceError
+        raise ServiceError(
+            detail="Avatar does not have a valid generated image to save.",
+            status_code=400,
+        )
+
+    try:
+        img_resp = requests.get(url_to_download, timeout=30)
+        img_resp.raise_for_status()
+
+        filename = f"avatar_{avatar.id}.png"
+        avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
+        avatar.is_saved = True
+        avatar.save(update_fields=["result_image", "is_saved", "updated_at"])
+    except Exception as exc:
+        from core.exceptions import ServiceError
+        if isinstance(exc, ServiceError):
+            raise exc
+        raw_error = str(exc)
+        logger.error("Avatar %s save to Cloudinary failed: %s", avatar.id, raw_error, exc_info=True)
+        raise ServiceError(
+            detail="Failed to save avatar image. Please try again later.",
+            debug_detail=raw_error,
+            status_code=502,
+        )
 
     return avatar
