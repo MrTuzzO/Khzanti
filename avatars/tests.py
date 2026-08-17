@@ -167,3 +167,58 @@ class AvatarAPIEndpointsTestCase(APITestCase):
         response = self.client.get("/api/v1/avatars/default/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["is_default"])
+
+    @patch("requests.get")
+    def test_avatar_save_flow_and_idempotency(self, mock_requests_get, mock_cloud):
+        mock_response = MagicMock()
+        mock_response.content = VALID_PNG_BYTES
+        mock_response.status_code = 200
+        mock_requests_get.return_value = mock_response
+
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/avatar_test.png",
+            is_saved=False,
+        )
+
+        # 1. Verify initially unsaved & returns fal.ai URL
+        status_resp = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+        self.assertEqual(status_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_resp.data["result_image"], "https://v3b.fal.media/avatar_test.png")
+        self.assertFalse(status_resp.data["saved"])
+
+        # 2. Save avatar (uploads to Cloudinary)
+        save_resp = self.client.post(f"/api/v1/avatars/{avatar.id}/save/")
+        self.assertEqual(save_resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(save_resp.data["saved"])
+        self.assertIn("http", save_resp.data["result_image"])
+
+        mock_requests_get.assert_called_once()
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+
+        # 3. Duplicate save call (must be idempotent, no second HTTP download)
+        save_resp_2 = self.client.post(f"/api/v1/avatars/{avatar.id}/save/")
+        self.assertEqual(save_resp_2.status_code, status.HTTP_200_OK)
+        self.assertEqual(mock_requests_get.call_count, 1)
+
+    def test_user_cannot_save_other_user_avatar(self, mock_cloud):
+        other_user = User.objects.create_user(
+            email="otheruser@example.com",
+            name="Other User",
+            password="password123",
+        )
+        other_avatar = Avatar.objects.create(
+            user=other_user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/other_avatar.png",
+            is_saved=False,
+        )
+
+        response = self.client.post(f"/api/v1/avatars/{other_avatar.id}/save/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
