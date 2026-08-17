@@ -1,6 +1,8 @@
+from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from core.exceptions import ServiceError
 from .models import Avatar
@@ -70,5 +72,29 @@ class AvatarListView(generics.ListAPIView):
 
     def get_queryset(self):
         return Avatar.objects.filter(user=self.request.user, is_default=False)
+
+
+class AvatarSaveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: AvatarSerializer})
+    def post(self, request, pk=None, *args, **kwargs):
+        from django.shortcuts import get_object_or_404
+        from .services import save_avatar_to_cloudinary
+
+        avatar = get_object_or_404(Avatar, pk=pk, user=request.user, is_default=False)
+        avatar = sync_avatar_status(avatar)
+        _raise_if_avatar_failed(avatar)
+
+        if avatar.status != Avatar.JobStatus.DONE:
+            raise ServiceError(
+                detail="Avatar generation is not completed yet.",
+                status_code=400,
+            )
+
+        saved_avatar = save_avatar_to_cloudinary(avatar)
+        serializer = AvatarSerializer(saved_avatar, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 
