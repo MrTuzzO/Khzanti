@@ -55,6 +55,7 @@ class WardrobeItemCreateSerializer(serializers.ModelSerializer):
 
 class ItemAnalysisSerializer(serializers.ModelSerializer):
     display_url = serializers.ReadOnlyField()
+    saved = serializers.BooleanField(source="is_saved", read_only=True)
 
     class Meta:
         model = ItemAnalysis
@@ -65,6 +66,8 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
             "display_url",
             "fal_cdn_url",
             "processed_image",
+            "is_saved",
+            "saved",
             "color",
             "description",
             "error_message",

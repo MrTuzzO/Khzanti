@@ -36,7 +36,7 @@ from .serializers import (
     TodayOutfitSerializer,
     TryOnCreateSerializer,
 )
-from .services import get_or_create_today_auto_job, submit_try_on_job
+from .services import get_or_create_today_auto_job, save_try_on_to_cloudinary, submit_try_on_job
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +146,8 @@ class TryOnStatusView(generics.RetrieveAPIView):
             raise Http404("Outfit job not found.")
 
         result_image_url = None
-        if job.status == JobStatus.DONE and job.result_image:
-            try:
-                result_image_url = job.result_image.url
-            except Exception:
-                result_image_url = None
+        if job.status == JobStatus.DONE:
+            result_image_url = job.display_result_image or None
 
         return Response({
             "status": job.status,
@@ -321,22 +318,44 @@ class TryOnWebhookView(AsyncAPIView):
             await job.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
             return Response({"status": "error_handled"}, status=status.HTTP_200_OK)
 
-        # Download image and save to Cloudinary
-        try:
-            img_resp = await sync_to_async(requests.get)(image_url, timeout=30)
-            img_resp.raise_for_status()
-            filename = f"outfit_tryon_{job.id}.png"
-            await sync_to_async(job.result_image.save)(filename, ContentFile(img_resp.content), save=False)
-        except Exception as exc:
-            logger.warning("[OUTFITS WEBHOOK TRY-ON] Image save failed for OutfitJob %s: %s", job.id, exc)
-
+        job.fal_cdn_url = image_url
         job.status = JobStatus.DONE
+        job.is_saved = False
         job.error_message = ""
         job.internal_error_detail = ""
-        await job.asave(update_fields=["result_image", "status", "error_message", "internal_error_detail", "updated_at"])
+        await job.asave(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
         logger.info("[OUTFITS WEBHOOK TRY-ON] Successfully completed OutfitJob %s", job.id)
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+class TryOnSaveView(APIView):
+    """
+    Explicitly save a completed try-on result (MANUAL or AUTO) to Cloudinary.
+    POST /api/v1/outfits/try-on/<id>/save/
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: OutfitJobSerializer})
+    def post(self, request, pk=None, *args, **kwargs):
+        job = get_object_or_404(OutfitJob, pk=pk, user=request.user)
+
+        if job.status == JobStatus.FAILED:
+            raise ServiceError(
+                detail=job.error_message or "Try-on generation failed. Cannot save failed try-on.",
+                debug_detail=job.internal_error_detail,
+                status_code=400,
+            )
+
+        if job.status != JobStatus.DONE:
+            raise ServiceError(
+                detail="Try-on generation is not completed yet.",
+                status_code=400,
+            )
+
+        saved_job = save_try_on_to_cloudinary(job)
+        serializer = OutfitJobSerializer(saved_job, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class SavedOutfitListCreateView(generics.ListCreateAPIView):

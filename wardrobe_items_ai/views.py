@@ -339,21 +339,11 @@ class VisionWebhookView(AsyncAPIView):
 
         analysis.color = str(parsed.get("color", "")).strip()
         analysis.description = str(parsed.get("description", "")).strip()
-
-        # Cloudinary swap
-        if analysis.fal_cdn_url:
-            try:
-                img_resp = await sync_to_async(requests.get)(analysis.fal_cdn_url, timeout=30)
-                img_resp.raise_for_status()
-                filename = f"processed_item_{analysis.wardrobe_item_id}.png"
-                await sync_to_async(analysis.processed_image.save)(filename, ContentFile(img_resp.content), save=False)
-            except Exception as exc:
-                logger.warning("[WARDROBE AI WEBHOOK VISION] Cloudinary migration failed for ItemAnalysis %s: %s", analysis.id, exc)
-
         analysis.status = ItemAnalysis.JobStatus.DONE
+        analysis.is_saved = False
         analysis.error_message = ""
         analysis.internal_error_detail = ""
-        await analysis.asave(update_fields=["color", "description", "processed_image", "status", "error_message", "internal_error_detail", "updated_at"])
+        await analysis.asave(update_fields=["color", "description", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
         logger.info(
             "[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s, detected_item_type='%s')",
             analysis.id,
@@ -362,3 +352,42 @@ class VisionWebhookView(AsyncAPIView):
         )
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+class WardrobeItemSaveView(APIView):
+    """
+    Explicitly save an AI-processed wardrobe item to Cloudinary.
+    POST /api/v1/wardrobe-items-ai/items/<id>/save/
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: WardrobeItemSerializer})
+    def post(self, request, pk=None, *args, **kwargs):
+        from django.shortcuts import get_object_or_404
+        from .services import save_wardrobe_item_to_cloudinary
+
+        item = get_object_or_404(
+            WardrobeItem.objects.select_related("category", "analysis"),
+            pk=pk,
+            user=request.user,
+        )
+
+        analysis = getattr(item, "analysis", None)
+        if not analysis:
+            raise ServiceError(
+                detail="Wardrobe item has no AI analysis record.",
+                status_code=400,
+            )
+
+        _raise_if_analysis_failed(analysis)
+
+        if analysis.status != ItemAnalysis.JobStatus.DONE:
+            raise ServiceError(
+                detail="Wardrobe item processing is not completed yet.",
+                status_code=400,
+            )
+
+        save_wardrobe_item_to_cloudinary(analysis)
+        item.refresh_from_db()
+        serializer = WardrobeItemSerializer(item, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)

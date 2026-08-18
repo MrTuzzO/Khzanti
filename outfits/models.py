@@ -48,6 +48,8 @@ class OutfitJob(models.Model):
         db_index=True,
     )
     fal_request_id = models.CharField(max_length=100, blank=True, db_index=True)
+    fal_cdn_url = models.URLField(max_length=1024, blank=True)
+    is_saved = models.BooleanField(default=False, db_index=True)
     result_image = models.ImageField(
         upload_to="outfits/result/",
         null=True,
@@ -61,6 +63,15 @@ class OutfitJob(models.Model):
     reasoning_note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def display_result_image(self) -> str:
+        if self.result_image:
+            try:
+                return self.result_image.url
+            except Exception:
+                pass
+        return self.fal_cdn_url or ""
 
     class Meta:
         ordering = ["-created_at"]
