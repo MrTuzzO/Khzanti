@@ -1,3 +1,4 @@
+import json
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -73,6 +74,23 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
         else:
             rep["profile_image"] = None
         return rep
+
+    def to_internal_value(self, data):
+        # When the request is multipart/form-data (e.g. includes a file upload),
+        # list fields like `aesthetics` arrive as a JSON string "[1,2,3]" instead
+        # of actual repeated form keys. Parse it here before DRF validation runs.
+        if "aesthetics" in data and isinstance(data.get("aesthetics"), str):
+            try:
+                parsed = json.loads(data["aesthetics"])
+                # QueryDict is immutable; use a mutable copy when needed.
+                try:
+                    data = data.copy()
+                except AttributeError:
+                    pass
+                data.setlist("aesthetics", parsed) if hasattr(data, "setlist") else data.__setitem__("aesthetics", parsed)
+            except (ValueError, TypeError):
+                pass
+        return super().to_internal_value(data)
 
     def validate_aesthetics(self, value):
         if len(value) > MAX_AESTHETICS_PER_PROFILE:
