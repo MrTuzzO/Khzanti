@@ -261,11 +261,14 @@ class CompleteProfileView(APIView):
 
     @extend_schema(responses={200: CompleteProfileSerializer})
     def get(self, request):
-        return Response(CompleteProfileSerializer(self.get_object()).data, status=status.HTTP_200_OK)
+        serializer = CompleteProfileSerializer(self.get_object(), context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @extend_schema(request=CompleteProfileSerializer, responses={200: CompleteProfileSerializer})
     def patch(self, request):
-        serializer = CompleteProfileSerializer(self.get_object(), data=request.data, partial=True)
+        serializer = CompleteProfileSerializer(
+            self.get_object(), data=request.data, partial=True, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         profile = serializer.save()
 
@@ -273,7 +276,7 @@ class CompleteProfileView(APIView):
             {
                 "detail": "Profile updated successfully.",
                 "is_profile_completed": profile.is_completed,
-                "profile": CompleteProfileSerializer(profile).data,
+                "profile": CompleteProfileSerializer(profile, context={"request": request}).data,
             },
             status=status.HTTP_200_OK,
         )
