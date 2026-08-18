@@ -325,7 +325,7 @@ class RaterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "avatar_url"]
+        fields = ["id", "username", "name", "profile_image"]
         read_only_fields = fields
 
 
