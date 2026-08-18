@@ -21,7 +21,7 @@ class PublicUserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "name",
-            "avatar_url",
+            "profile_image",
             "followers_count",
             "following_count",
             "shared_outfits_count",

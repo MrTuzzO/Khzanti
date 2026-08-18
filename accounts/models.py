@@ -96,10 +96,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     def get_short_name(self):
         return self.name
 
-    @property
-    def avatar_url(self):
-        return self.profile_image.url if self.profile_image else None
-
 
 class CustomerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="customer_profile")

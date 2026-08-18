@@ -14,7 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "username", "name", "email", "avatar_url", "is_email_verified", "is_profile_completed", "created_at")
+        fields = ("id", "username", "name", "email", "profile_image", "is_email_verified", "is_profile_completed", "created_at")
         read_only_fields = fields
 
     def get_is_profile_completed(self, obj) -> bool:
@@ -76,18 +76,18 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
         return rep
 
     def to_internal_value(self, data):
-        # When the request is multipart/form-data (e.g. includes a file upload),
-        # list fields like `aesthetics` arrive as a JSON string "[1,2,3]" instead
-        # of actual repeated form keys. Parse it here before DRF validation runs.
-        if "aesthetics" in data and isinstance(data.get("aesthetics"), str):
+        # When the request is multipart/form-data, `aesthetics` arrives as a
+        # JSON string "[1,2,3]" instead of repeated form keys.
+        # We convert to a flat dict via QueryDict.dict() (gives {key: last_value})
+        # so DRF's ManyRelatedField receives the parsed list via dict.get().
+        aesthetics_val = data.get("aesthetics")
+        if isinstance(aesthetics_val, str):
             try:
-                parsed = json.loads(data["aesthetics"])
-                # QueryDict is immutable; use a mutable copy when needed.
-                try:
-                    data = data.copy()
-                except AttributeError:
-                    pass
-                data.setlist("aesthetics", parsed) if hasattr(data, "setlist") else data.__setitem__("aesthetics", parsed)
+                parsed = json.loads(aesthetics_val)
+                if isinstance(parsed, list):
+                    plain = data.dict() if hasattr(data, "dict") else dict(data)
+                    plain["aesthetics"] = parsed
+                    data = plain
             except (ValueError, TypeError):
                 pass
         return super().to_internal_value(data)
