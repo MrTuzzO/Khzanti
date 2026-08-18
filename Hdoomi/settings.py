@@ -289,9 +289,7 @@ SPECTACULAR_SETTINGS = {
     "PATH_PREFIX": "/api/v1",
 
     "ENUM_NAME_OVERRIDES": {
-        "ShiftStatusEnum": "shift.models.Shift.Status",
-        "ShiftAssignmentStatusEnum": "shift.models.ShiftAssignment.Status",
-        "NurseTypeEnum": "nurses.models.NurseProfile.NurseType",
+        "JobStatusEnum": "outfits.models.JobStatus",
     },
 }
 
