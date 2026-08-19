@@ -10,7 +10,9 @@ User = get_user_model()
 
 class TryOnCreateSerializer(serializers.Serializer):
     avatar_id = serializers.IntegerField(
-        help_text="ID of the Avatar belonging to the user."
+        required=False,
+        allow_null=True,
+        help_text="ID of the Avatar belonging to the user. Optional: defaults to user's preferred avatar.",
     )
     wardrobe_item_ids = serializers.ListField(
         child=serializers.IntegerField(),
@@ -19,19 +21,23 @@ class TryOnCreateSerializer(serializers.Serializer):
     )
 
     def validate_avatar_id(self, value):
+        if not value:
+            return None
         user = self.context["request"].user
         try:
             avatar = Avatar.objects.get(pk=value)
         except Avatar.DoesNotExist:
             raise serializers.ValidationError(f"Avatar with ID {value} does not exist.")
 
-        if avatar.user != user:
+        if not avatar.is_default and avatar.user != user:
             raise serializers.ValidationError("Avatar does not belong to the authenticated user.")
 
-        if avatar.status != Avatar.JobStatus.DONE and not avatar.result_image:
+        if avatar.status != Avatar.JobStatus.DONE and not avatar.result_image and not avatar.fal_cdn_url:
             raise serializers.ValidationError("Selected avatar generation is not completed yet.")
 
         return avatar
+
+
 
     def validate_wardrobe_item_ids(self, values):
         if not values:
@@ -82,8 +88,14 @@ class TryOnCreateSerializer(serializers.Serializer):
         return items
 
     def validate(self, attrs):
-        attrs["avatar"] = attrs["avatar_id"]
-        attrs["wardrobe_items"] = attrs["wardrobe_item_ids"]
+        attrs = super().validate(attrs)
+        if not attrs.get("avatar_id"):
+            user = self.context["request"].user
+            from outfits.services import resolve_tryon_avatar
+            attrs["avatar"] = resolve_tryon_avatar(user)
+        else:
+            attrs["avatar"] = attrs.get("avatar_id")
+        attrs["wardrobe_items"] = attrs.get("wardrobe_item_ids")
         return attrs
 
 
