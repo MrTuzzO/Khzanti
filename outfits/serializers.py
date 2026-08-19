@@ -103,6 +103,7 @@ class OutfitJobSerializer(serializers.ModelSerializer):
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
+    saved = serializers.BooleanField(source="is_saved", read_only=True)
     generated_date = serializers.DateField(source="scheduled_date", read_only=True)
 
     class Meta:
@@ -115,6 +116,8 @@ class OutfitJobSerializer(serializers.ModelSerializer):
             "avatar",
             "wardrobe_items",
             "result_image",
+            "is_saved",
+            "saved",
             "reasoning_title",
             "reasoning_subtitle",
             "reasoning_items",
@@ -127,12 +130,8 @@ class OutfitJobSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_result_image(self, obj):
-        if obj.result_image:
-            try:
-                return obj.result_image.url
-            except Exception:
-                pass
-        return None
+        url = obj.display_result_image
+        return url if url else None
 
 
 class OutfitJobStatusSerializer(serializers.Serializer):
@@ -146,6 +145,7 @@ class TodayOutfitSerializer(serializers.ModelSerializer):
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
+    saved = serializers.BooleanField(source="is_saved", read_only=True)
 
     class Meta:
         model = OutfitJob
@@ -157,6 +157,8 @@ class TodayOutfitSerializer(serializers.ModelSerializer):
             "avatar",
             "wardrobe_items",
             "result_image",
+            "is_saved",
+            "saved",
             "reasoning_title",
             "reasoning_subtitle",
             "reasoning_items",
@@ -169,11 +171,9 @@ class TodayOutfitSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_result_image(self, obj):
-        if obj.status == JobStatus.DONE and obj.result_image:
-            try:
-                return obj.result_image.url
-            except Exception:
-                pass
+        if obj.status == JobStatus.DONE:
+            url = obj.display_result_image
+            return url if url else None
         return None
 
 
@@ -219,7 +219,24 @@ class SavedOutfitCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        return SavedOutfit.objects.create(**validated_data)
+        from .services import save_try_on_to_cloudinary
+
+        job = validated_data.pop("outfit_job")
+        saved_date = validated_data.pop("date")
+
+        save_try_on_to_cloudinary(job)
+
+        user = validated_data.pop("user", None) or self.context["request"].user
+
+        saved_outfit, _ = SavedOutfit.objects.update_or_create(
+            user=user,
+            date=saved_date,
+            defaults={
+                "outfit_job": job,
+                **validated_data,
+            },
+        )
+        return saved_outfit
 
 
 class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
@@ -264,6 +281,12 @@ class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
         if "outfit_job_id" in attrs:
             attrs["outfit_job"] = attrs.pop("outfit_job_id")
         return attrs
+
+    def update(self, instance, validated_data):
+        from .services import save_try_on_to_cloudinary
+        if "outfit_job" in validated_data:
+            save_try_on_to_cloudinary(validated_data["outfit_job"])
+        return super().update(instance, validated_data)
 
 
 class SavedOutfitSerializer(serializers.ModelSerializer):
@@ -337,7 +360,7 @@ class RaterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "name", "avatar_url"]
+        fields = ["id", "username", "name", "profile_image"]
         read_only_fields = fields
 
 

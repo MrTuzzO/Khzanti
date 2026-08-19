@@ -1,3 +1,4 @@
+import json
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -13,10 +14,10 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "username", "name", "email", "avatar_url", "is_email_verified", "is_profile_completed", "created_at")
+        fields = ("id", "username", "name", "email", "profile_image", "is_email_verified", "is_profile_completed", "created_at")
         read_only_fields = fields
-    
-    def get_is_profile_completed(self, obj):
+
+    def get_is_profile_completed(self, obj) -> bool:
         return getattr(getattr(obj, "customer_profile", None), "is_completed", False)
 
 
@@ -43,10 +44,13 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
         many=True,
         required=False,
     )
+    # Writable fields that map to the related User model
+    profile_image = serializers.ImageField(required=False, allow_null=True)
+    name = serializers.CharField(required=False, max_length=150)
 
     class Meta:
         model = CustomerProfile
-        fields = ("age", "gender", "height", "body_type", "country", "aesthetics")
+        fields = ("name", "age", "gender", "height", "body_type", "country", "aesthetics", "profile_image")
         extra_kwargs = {
             "age": {"required": False},
             "gender": {"required": False},
@@ -55,6 +59,39 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
             "country": {"required": False},
         }
 
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        # Read user fields from the related user
+        user = instance.user
+        request = self.context.get("request")
+        rep["name"] = user.name
+        if user.profile_image:
+            rep["profile_image"] = (
+                request.build_absolute_uri(user.profile_image.url)
+                if request
+                else user.profile_image.url
+            )
+        else:
+            rep["profile_image"] = None
+        return rep
+
+    def to_internal_value(self, data):
+        # When the request is multipart/form-data, `aesthetics` arrives as a
+        # JSON string "[1,2,3]" instead of repeated form keys.
+        # We convert to a flat dict via QueryDict.dict() (gives {key: last_value})
+        # so DRF's ManyRelatedField receives the parsed list via dict.get().
+        aesthetics_val = data.get("aesthetics")
+        if isinstance(aesthetics_val, str):
+            try:
+                parsed = json.loads(aesthetics_val)
+                if isinstance(parsed, list):
+                    plain = data.dict() if hasattr(data, "dict") else dict(data)
+                    plain["aesthetics"] = parsed
+                    data = plain
+            except (ValueError, TypeError):
+                pass
+        return super().to_internal_value(data)
+
     def validate_aesthetics(self, value):
         if len(value) > MAX_AESTHETICS_PER_PROFILE:
             raise serializers.ValidationError(f"Select up to {MAX_AESTHETICS_PER_PROFILE} aesthetics.")
@@ -62,6 +99,20 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         aesthetics = validated_data.pop("aesthetics", None)
+        profile_image = validated_data.pop("profile_image", None)
+        name = validated_data.pop("name", None)
+
+        # Update User fields if provided
+        user_update_fields = []
+        if profile_image is not None:
+            instance.user.profile_image = profile_image
+            user_update_fields.append("profile_image")
+        if name is not None:
+            instance.user.name = name
+            user_update_fields.append("name")
+        if user_update_fields:
+            instance.user.save(update_fields=user_update_fields)
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 

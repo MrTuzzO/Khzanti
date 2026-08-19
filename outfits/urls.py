@@ -8,6 +8,7 @@ from .views import (
     TodayOutfitResetView,
     TodayOutfitView,
     TryOnCreateView,
+    TryOnSaveView,
     TryOnStatusView,
     TryOnWebhookView,
 )
@@ -19,6 +20,7 @@ urlpatterns = [
     path("today/reset/", TodayOutfitResetView.as_view(), name="today-outfit-reset"),
     path("try-on/", TryOnCreateView.as_view(), name="try-on-create"),
     path("try-on/<int:pk>/status/", TryOnStatusView.as_view(), name="try-on-status"),
+    path("try-on/<int:pk>/save/", TryOnSaveView.as_view(), name="try-on-save"),
     path("try-on/webhook/", TryOnWebhookView.as_view(), name="try-on-webhook"),
     path("saved/", SavedOutfitListCreateView.as_view(), name="saved-outfit-list-create"),
     path("saved/<int:pk>/", SavedOutfitDetailView.as_view(), name="saved-outfit-detail"),

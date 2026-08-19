@@ -35,6 +35,9 @@ class SystemDefaultAvatarAdminSerializer(serializers.Serializer):
 from drf_spectacular.utils import extend_schema_field
 
 
+from drf_spectacular.utils import extend_schema_field
+
+
 class AvatarSerializer(serializers.ModelSerializer):
     result_image = serializers.SerializerMethodField()
 

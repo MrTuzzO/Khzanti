@@ -1,8 +1,12 @@
 import logging
+import requests
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
+from django.core.files.base import ContentFile
 import fal_client
+
 from avatars.models import Avatar
+from core.exceptions import ServiceError
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
 from .models import JobStatus, OutfitJob, TriggerType
 
@@ -133,6 +137,44 @@ def submit_try_on_job(job: OutfitJob) -> OutfitJob:
     Synchronous wrapper around submit_try_on_job_async.
     """
     return async_to_sync(submit_try_on_job_async)(job)
+
+
+def save_try_on_to_cloudinary(job: OutfitJob) -> OutfitJob:
+    """
+    Explicitly downloads the generated try-on result image from fal.ai CDN URL and uploads it to Cloudinary storage.
+    Idempotent: if already saved, returns immediately without re-uploading.
+    Works for both MANUAL and AUTO try-ons.
+    """
+    if job.is_saved:
+        return job
+
+    url_to_download = job.fal_cdn_url or (job.result_image.url if job.result_image else "")
+    if not url_to_download:
+        raise ServiceError(
+            detail="Try-on job does not have a valid generated image to save.",
+            status_code=400,
+        )
+
+    try:
+        img_resp = requests.get(url_to_download, timeout=30)
+        img_resp.raise_for_status()
+
+        filename = f"outfit_tryon_{job.id}.png"
+        job.result_image.save(filename, ContentFile(img_resp.content), save=False)
+        job.is_saved = True
+        job.save(update_fields=["result_image", "is_saved", "updated_at"])
+    except ServiceError:
+        raise
+    except Exception as exc:
+        raw_error = str(exc)
+        logger.error("OutfitJob %s save to Cloudinary failed: %s", job.id, raw_error, exc_info=True)
+        raise ServiceError(
+            detail="Failed to save try-on image. Please try again later.",
+            debug_detail=raw_error,
+            status_code=502,
+        )
+
+    return job
 
 
 from datetime import timedelta

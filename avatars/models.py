@@ -63,6 +63,15 @@ class Avatar(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def display_result_image(self) -> str:
+        if self.result_image:
+            try:
+                return self.result_image.url
+            except Exception:
+                pass
+        return self.fal_cdn_url or ""
+
     class Meta:
         ordering = ["-created_at"]
         constraints = [
