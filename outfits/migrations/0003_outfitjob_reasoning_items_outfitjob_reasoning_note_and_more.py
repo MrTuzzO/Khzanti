@@ -9,25 +9,4 @@ class Migration(migrations.Migration):
         ('outfits', '0002_outfitjob_scheduled_date_and_more'),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name='outfitjob',
-            name='reasoning_items',
-            field=models.JSONField(blank=True, default=list),
-        ),
-        migrations.AddField(
-            model_name='outfitjob',
-            name='reasoning_note',
-            field=models.TextField(blank=True),
-        ),
-        migrations.AddField(
-            model_name='outfitjob',
-            name='reasoning_subtitle',
-            field=models.CharField(blank=True, max_length=255),
-        ),
-        migrations.AddField(
-            model_name='outfitjob',
-            name='reasoning_title',
-            field=models.CharField(blank=True, max_length=255),
-        ),
-    ]
+    operations = []
