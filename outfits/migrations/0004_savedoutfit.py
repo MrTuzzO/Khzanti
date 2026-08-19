@@ -12,23 +12,4 @@ class Migration(migrations.Migration):
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
-    operations = [
-        migrations.CreateModel(
-            name='SavedOutfit',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('date', models.DateField(db_index=True)),
-                ('note', models.TextField(blank=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('outfit_job', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='saved_entries', to='outfits.outfitjob')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='saved_outfits', to=settings.AUTH_USER_MODEL)),
-            ],
-            options={
-                'verbose_name': 'Saved Outfit',
-                'verbose_name_plural': 'Saved Outfits',
-                'ordering': ['-date'],
-                'constraints': [models.UniqueConstraint(fields=('user', 'date'), name='unique_saved_outfit_per_user_per_date')],
-            },
-        ),
-    ]
+    operations = []
