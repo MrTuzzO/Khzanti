@@ -14,19 +14,4 @@ class Migration(migrations.Migration):
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name='outfitjob',
-            name='scheduled_date',
-            field=models.DateField(db_index=True, default=django.utils.timezone.now),
-        ),
-        migrations.AlterField(
-            model_name='outfitjob',
-            name='trigger_type',
-            field=models.CharField(choices=[('manual', 'Manual'), ('auto', 'Auto')], default='manual', max_length=20),
-        ),
-        migrations.AddConstraint(
-            model_name='outfitjob',
-            constraint=models.UniqueConstraint(condition=models.Q(('trigger_type', 'auto')), fields=('user', 'scheduled_date', 'trigger_type'), name='unique_auto_outfit_per_user_per_day'),
-        ),
-    ]
+    operations = []
