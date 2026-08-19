@@ -339,21 +339,13 @@ class VisionWebhookView(AsyncAPIView):
 
         analysis.color = str(parsed.get("color", "")).strip()
         analysis.description = str(parsed.get("description", "")).strip()
-
-        # Cloudinary swap
-        if analysis.fal_cdn_url:
-            try:
-                img_resp = await sync_to_async(requests.get)(analysis.fal_cdn_url, timeout=30)
-                img_resp.raise_for_status()
-                filename = f"processed_item_{analysis.wardrobe_item_id}.png"
-                await sync_to_async(analysis.processed_image.save)(filename, ContentFile(img_resp.content), save=False)
-            except Exception as exc:
-                logger.warning("[WARDROBE AI WEBHOOK VISION] Cloudinary migration failed for ItemAnalysis %s: %s", analysis.id, exc)
-
         analysis.status = ItemAnalysis.JobStatus.DONE
+        analysis.is_saved = False
         analysis.error_message = ""
         analysis.internal_error_detail = ""
-        await analysis.asave(update_fields=["color", "description", "processed_image", "status", "error_message", "internal_error_detail", "updated_at"])
+        await analysis.asave(
+            update_fields=["color", "description", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"]
+        )
         logger.info(
             "[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s, detected_item_type='%s')",
             analysis.id,
@@ -362,3 +354,57 @@ class VisionWebhookView(AsyncAPIView):
         )
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+class WardrobeItemSaveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=None,
+        responses={200: WardrobeItemSerializer},
+        description="Save a completed wardrobe item analysis result permanently to Cloudinary storage.",
+    )
+    def post(self, request, pk, *args, **kwargs):
+        try:
+            item = WardrobeItem.objects.select_related("category", "analysis").get(
+                pk=pk, user=request.user
+            )
+        except WardrobeItem.DoesNotExist:
+            raise Http404("Wardrobe item not found.")
+
+        analysis = getattr(item, "analysis", None)
+        if not analysis or analysis.status != ItemAnalysis.JobStatus.DONE:
+            return Response(
+                {"detail": "Wardrobe item analysis is not completed yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not analysis.fal_cdn_url:
+            return Response(
+                {"detail": "No processed image URL available to save."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Idempotent check: return existing saved object without re-downloading/re-uploading
+        if analysis.is_saved and analysis.processed_image:
+            serializer = WardrobeItemSerializer(item, context={"request": request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # Download from fal_cdn_url and save to Cloudinary
+        try:
+            resp = requests.get(analysis.fal_cdn_url, timeout=30)
+            resp.raise_for_status()
+            filename = f"processed_item_{item.id}.png"
+            analysis.processed_image.save(filename, ContentFile(resp.content), save=False)
+            analysis.is_saved = True
+            analysis.save(update_fields=["processed_image", "is_saved", "updated_at"])
+        except Exception as exc:
+            logger.error("Failed to save wardrobe item %s processed image to Cloudinary: %s", item.id, exc, exc_info=True)
+            return Response(
+                {"detail": "Failed to store processed image to Cloudinary storage. Please try again later."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        item.refresh_from_db()
+        serializer = WardrobeItemSerializer(item, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
