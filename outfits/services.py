@@ -74,12 +74,14 @@ async def submit_try_on_job_async(job: OutfitJob) -> OutfitJob:
 
     # Build image URLs starting with Avatar
     avatar_image_url = ""
-    if avatar_obj.result_image:
+    if avatar_obj.is_saved and avatar_obj.result_image:
         try:
             avatar_image_url = avatar_obj.result_image.url
         except Exception:
             pass
-    elif avatar_obj.source_photo:
+    if not avatar_image_url and avatar_obj.fal_cdn_url:
+        avatar_image_url = avatar_obj.fal_cdn_url
+    if not avatar_image_url and avatar_obj.source_photo:
         try:
             avatar_image_url = avatar_obj.source_photo.url
         except Exception:
@@ -190,25 +192,23 @@ from openai import OpenAI
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
 
 
+from avatars.services import resolve_user_default_avatar
+
+
+def resolve_tryon_avatar(user, requested_style=None):
+    """
+    Delegates to unified resolve_user_default_avatar service.
+    """
+    return resolve_user_default_avatar(user, requested_style=requested_style)
+
+
 def select_auto_tryon_assets(user, scheduled_date):
     """
     Fallback asset selector when OpenAI selection is bypassed or in fallback mode.
-    - Selects completed avatar.
+    - Selects completed avatar following priority chain.
     - Selects up to 1 item per category applying 3-day no-repeat rule.
     """
-    avatar = Avatar.objects.filter(user=user, status=Avatar.JobStatus.DONE).order_by("-created_at").first()
-    if not avatar:
-        avatar = Avatar.objects.filter(user=user).order_by("-created_at").first()
-    if not avatar:
-        avatar = Avatar.objects.filter(is_default=True).first()
-    if not avatar:
-        avatar = Avatar.objects.create(
-            user=None,
-            is_default=True,
-            status=Avatar.JobStatus.DONE,
-            style=Avatar.Style.REALISTIC,
-            result_image="avatars/result/default_avatar.png",
-        )
+    avatar = resolve_tryon_avatar(user)
 
     past_dates = [scheduled_date - timedelta(days=i) for i in range(1, 4)]
     recent_auto_jobs = OutfitJob.objects.filter(

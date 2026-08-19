@@ -63,7 +63,7 @@ class ItemAnalysis(models.Model):
         null=True,
         blank=True,
     )
-    fal_cdn_url = models.URLField(max_length=1024, blank=True)
+    fal_cdn_url = models.URLField(max_length=1024, blank=True, default="")
     is_saved = models.BooleanField(default=False, db_index=True)
     color = models.CharField(max_length=100, blank=True)
     description = models.TextField(blank=True)
@@ -80,12 +80,12 @@ class ItemAnalysis(models.Model):
 
     @property
     def display_url(self) -> str:
-        if self.processed_image:
+        if self.is_saved and self.processed_image:
             try:
                 return self.processed_image.url
             except Exception:
                 pass
-        return self.fal_cdn_url or ""
+        return self.fal_cdn_url or (self.processed_image.url if self.processed_image else "")
 
     def __str__(self):
         return f"Analysis {self.pk} - {self.wardrobe_item}"

@@ -27,6 +27,12 @@ class AvatarCreateSerializer(serializers.ModelSerializer):
         value.name = f"{uuid.uuid4().hex}{ext}"
         return value
 
+class SystemDefaultAvatarAdminSerializer(serializers.Serializer):
+    gender = serializers.ChoiceField(choices=["male", "female"], required=True)
+    style = serializers.ChoiceField(choices=Avatar.Style.choices, required=True)
+    image = serializers.ImageField(required=True)
+
+from drf_spectacular.utils import extend_schema_field
 
 
 from drf_spectacular.utils import extend_schema_field
@@ -34,27 +40,39 @@ from drf_spectacular.utils import extend_schema_field
 
 class AvatarSerializer(serializers.ModelSerializer):
     result_image = serializers.SerializerMethodField()
-    saved = serializers.BooleanField(source="is_saved", read_only=True)
 
     class Meta:
         model = Avatar
         fields = [
             "id",
             "status",
+            "gender",
             "style",
             "is_default",
+            "is_preferred",
+            "is_saved",
             "source_photo",
             "result_image",
-            "is_saved",
-            "saved",
+            "fal_cdn_url",
             "error_message",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
 
-    @extend_schema_field(serializers.CharField(allow_null=True))
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_result_image(self, obj):
-        url = obj.display_result_image
-        return url if url else None
+        if obj.is_default:
+            if obj.result_image:
+                try:
+                    return obj.result_image.url
+                except Exception:
+                    pass
+            return None
+        if obj.is_saved and obj.result_image:
+            try:
+                return obj.result_image.url
+            except Exception:
+                pass
+        return obj.fal_cdn_url or None
 

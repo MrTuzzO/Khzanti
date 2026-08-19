@@ -343,7 +343,9 @@ class VisionWebhookView(AsyncAPIView):
         analysis.is_saved = False
         analysis.error_message = ""
         analysis.internal_error_detail = ""
-        await analysis.asave(update_fields=["color", "description", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
+        await analysis.asave(
+            update_fields=["color", "description", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"]
+        )
         logger.info(
             "[WARDROBE AI WEBHOOK VISION] Successfully completed analysis for ItemAnalysis %s (WardrobeItem %s, detected_item_type='%s')",
             analysis.id,
@@ -355,39 +357,54 @@ class VisionWebhookView(AsyncAPIView):
 
 
 class WardrobeItemSaveView(APIView):
-    """
-    Explicitly save an AI-processed wardrobe item to Cloudinary.
-    POST /api/v1/wardrobe-items-ai/items/<id>/save/
-    """
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(request=None, responses={200: WardrobeItemSerializer})
-    def post(self, request, pk=None, *args, **kwargs):
-        from django.shortcuts import get_object_or_404
-        from .services import save_wardrobe_item_to_cloudinary
-
-        item = get_object_or_404(
-            WardrobeItem.objects.select_related("category", "analysis"),
-            pk=pk,
-            user=request.user,
-        )
+    @extend_schema(
+        request=None,
+        responses={200: WardrobeItemSerializer},
+        description="Save a completed wardrobe item analysis result permanently to Cloudinary storage.",
+    )
+    def post(self, request, pk, *args, **kwargs):
+        try:
+            item = WardrobeItem.objects.select_related("category", "analysis").get(
+                pk=pk, user=request.user
+            )
+        except WardrobeItem.DoesNotExist:
+            raise Http404("Wardrobe item not found.")
 
         analysis = getattr(item, "analysis", None)
-        if not analysis:
-            raise ServiceError(
-                detail="Wardrobe item has no AI analysis record.",
-                status_code=400,
+        if not analysis or analysis.status != ItemAnalysis.JobStatus.DONE:
+            return Response(
+                {"detail": "Wardrobe item analysis is not completed yet."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _raise_if_analysis_failed(analysis)
-
-        if analysis.status != ItemAnalysis.JobStatus.DONE:
-            raise ServiceError(
-                detail="Wardrobe item processing is not completed yet.",
-                status_code=400,
+        if not analysis.fal_cdn_url:
+            return Response(
+                {"detail": "No processed image URL available to save."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        save_wardrobe_item_to_cloudinary(analysis)
+        # Idempotent check: return existing saved object without re-downloading/re-uploading
+        if analysis.is_saved and analysis.processed_image:
+            serializer = WardrobeItemSerializer(item, context={"request": request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # Download from fal_cdn_url and save to Cloudinary
+        try:
+            resp = requests.get(analysis.fal_cdn_url, timeout=30)
+            resp.raise_for_status()
+            filename = f"processed_item_{item.id}.png"
+            analysis.processed_image.save(filename, ContentFile(resp.content), save=False)
+            analysis.is_saved = True
+            analysis.save(update_fields=["processed_image", "is_saved", "updated_at"])
+        except Exception as exc:
+            logger.error("Failed to save wardrobe item %s processed image to Cloudinary: %s", item.id, exc, exc_info=True)
+            return Response(
+                {"detail": "Failed to store processed image to Cloudinary storage. Please try again later."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
         item.refresh_from_db()
         serializer = WardrobeItemSerializer(item, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)

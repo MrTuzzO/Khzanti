@@ -55,7 +55,7 @@ class WardrobeItemCreateSerializer(serializers.ModelSerializer):
 
 class ItemAnalysisSerializer(serializers.ModelSerializer):
     display_url = serializers.ReadOnlyField()
-    saved = serializers.BooleanField(source="is_saved", read_only=True)
+    processed_image = serializers.SerializerMethodField()
 
     class Meta:
         model = ItemAnalysis
@@ -63,6 +63,7 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
             "id",
             "wardrobe_item",
             "status",
+            "is_saved",
             "display_url",
             "fal_cdn_url",
             "processed_image",
@@ -75,6 +76,15 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_processed_image(self, obj):
+        if obj.is_saved and obj.processed_image:
+            try:
+                return obj.processed_image.url
+            except Exception:
+                pass
+        return obj.fal_cdn_url or None
 
 
 

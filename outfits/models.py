@@ -48,13 +48,13 @@ class OutfitJob(models.Model):
         db_index=True,
     )
     fal_request_id = models.CharField(max_length=100, blank=True, db_index=True)
-    fal_cdn_url = models.URLField(max_length=1024, blank=True)
-    is_saved = models.BooleanField(default=False, db_index=True)
+    fal_cdn_url = models.URLField(max_length=1024, blank=True, default="", null=True)
     result_image = models.ImageField(
         upload_to="outfits/result/",
         null=True,
         blank=True,
     )
+    is_saved = models.BooleanField(default=False, db_index=True)
     error_message = models.TextField(blank=True)
     internal_error_detail = models.TextField(blank=True)
     reasoning_title = models.CharField(max_length=255, blank=True)

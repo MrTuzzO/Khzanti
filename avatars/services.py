@@ -9,6 +9,66 @@ from .models import Avatar
 logger = logging.getLogger(__name__)
 
 
+def resolve_user_default_avatar(user, requested_style=None):
+    """
+    Unified style-strict default avatar resolver:
+    1. User's preferred completed avatar matching requested_style.
+    2. Latest completed user avatar matching requested_style.
+    3. Admin system default matching user gender + requested_style.
+    """
+    if requested_style not in Avatar.Style.values:
+        requested_style = Avatar.Style.REALISTIC
+
+    if user and user.is_authenticated:
+        pref_avatar = Avatar.objects.filter(
+            user=user,
+            is_preferred=True,
+            status=Avatar.JobStatus.DONE,
+            style=requested_style,
+        ).first()
+        if pref_avatar:
+            return pref_avatar
+
+        latest_avatar = Avatar.objects.filter(
+            user=user,
+            status=Avatar.JobStatus.DONE,
+            style=requested_style,
+        ).order_by("-created_at").first()
+        if latest_avatar:
+            return latest_avatar
+
+    user_gender = "male"
+    if user and user.is_authenticated:
+        profile = getattr(user, "customer_profile", None)
+        if profile and profile.gender in ("male", "female"):
+            user_gender = profile.gender
+
+    system_default = Avatar.objects.filter(
+        is_default=True,
+        gender=user_gender,
+        style=requested_style,
+    ).first()
+
+    if not system_default:
+        system_default = Avatar.objects.filter(is_default=True, style=requested_style).first()
+
+    if not system_default:
+        system_default = Avatar.objects.filter(is_default=True).first()
+
+    if not system_default:
+        system_default = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender=user_gender,
+            style=requested_style,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+    return system_default
+
+
 DEFAULT_CLOTHING_PROMPTS = {
     "male": (
         "Default Clothing:\n"
@@ -214,18 +274,28 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
                     img_val = res.get("image")
                     if isinstance(img_val, dict):
                         image_url = img_val.get("url")
-                    elif isinstance(img_val, str):
-                        image_url = img_val
-
             if not image_url:
                 raise Exception(f"No output image URL found in fal.ai result: {res}")
+
+            if avatar.user and not avatar.is_default:
+                Avatar.objects.filter(user=avatar.user, is_preferred=True).exclude(pk=avatar.pk).update(is_preferred=False)
+                avatar.is_preferred = True
 
             avatar.fal_cdn_url = image_url
             avatar.status = Avatar.JobStatus.DONE
             avatar.is_saved = False
             avatar.error_message = ""
             avatar.internal_error_detail = ""
-            avatar.save(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
+            avatar.save(
+                update_fields=[
+                    "fal_cdn_url",
+                    "status",
+                    "is_preferred",
+                    "error_message",
+                    "internal_error_detail",
+                    "updated_at",
+                ]
+            )
     except Exception as exc:
         raw_error = str(exc)
         logger.error("Avatar job %s status sync failed: %s", avatar.id, raw_error, exc_info=True)

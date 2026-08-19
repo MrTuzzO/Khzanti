@@ -1,0 +1,3044 @@
+openapi: 3.0.3
+info:
+  title: Hdoom-i API
+  version: 1.0.0
+  description: API documentation for Hdoom-i
+  contact:
+    name: Khirul Islam
+    email: khirulislam@proton.me
+paths:
+  /api/v1/auth/aesthetics/:
+    get:
+      operationId: auth_aesthetics_list
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Aesthetic'
+          description: ''
+  /api/v1/auth/change-password/:
+    post:
+      operationId: auth_change_password_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/delete-account/:
+    post:
+      operationId: auth_delete_account_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteAccountRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DeleteAccountRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DeleteAccountRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/forgot-password/:
+    post:
+      operationId: auth_forgot_password_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/profile/:
+    get:
+      operationId: auth_profile_retrieve
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: auth_profile_partial_update
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateProfileRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/profile/complete/:
+    get:
+      operationId: auth_profile_complete_retrieve
+      description: Get/update the "Complete Profile" step data collected after signup.
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteProfile'
+          description: ''
+    patch:
+      operationId: auth_profile_complete_partial_update
+      description: Get/update the "Complete Profile" step data collected after signup.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCompleteProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCompleteProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCompleteProfileRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteProfile'
+          description: ''
+  /api/v1/auth/resend-otp/:
+    post:
+      operationId: auth_resend_otp_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendOTPRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResendOTPRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResendOTPRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/reset-password/:
+    post:
+      operationId: auth_reset_password_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/signup/:
+    post:
+      operationId: auth_signup_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/token/refresh/:
+    post:
+      operationId: auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/v1/auth/verify-email/:
+    post:
+      operationId: auth_verify_email_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/verify-reset-otp/:
+    post:
+      operationId: auth_verify_reset_otp_create
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyResetOTPRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VerifyResetOTPRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifyResetOTPRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/avatars/:
+    post:
+      operationId: avatars_create
+      tags:
+      - avatars
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvatarCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AvatarCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AvatarCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvatarCreate'
+          description: ''
+  /api/v1/avatars/{id}/save/:
+    post:
+      operationId: avatars_save_create
+      description: |-
+        On-demand Cloudinary save endpoint for completed avatars.
+        Downloads the fal.ai result from fal_cdn_url, uploads it to Cloudinary (saving to result_image),
+        sets is_saved=True, and returns the persistent Cloudinary URL.
+        Idempotent: if already saved, returns the saved avatar without re-uploading.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - avatars
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+          description: ''
+  /api/v1/avatars/{id}/status/:
+    get:
+      operationId: avatars_status_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - avatars
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+          description: ''
+  /api/v1/avatars/admin/defaults/:
+    get:
+      operationId: avatars_admin_defaults_list
+      description: |-
+        Admin-only endpoint for managing system default avatars (male/female x realistic/cartoon).
+        GET: Returns all configured system default avatars.
+        POST: Uploads the provided image to Cloudinary and updates or creates the system default
+              for the specified (gender, style) combination.
+      tags:
+      - avatars
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Avatar'
+          description: ''
+    post:
+      operationId: avatars_admin_defaults_create
+      description: |-
+        Admin-only endpoint for managing system default avatars (male/female x realistic/cartoon).
+        GET: Returns all configured system default avatars.
+        POST: Uploads the provided image to Cloudinary and updates or creates the system default
+              for the specified (gender, style) combination.
+      tags:
+      - avatars
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SystemDefaultAvatarAdminRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SystemDefaultAvatarAdminRequest'
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemDefaultAvatarAdminRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+          description: ''
+  /api/v1/avatars/default/:
+    get:
+      operationId: avatars_default_retrieve
+      description: Retrieves the user's current default avatar. Returns the user's
+        preferred completed avatar if one exists. Otherwise, falls back to the admin-managed
+        system default matching the user's gender and requested style.
+      summary: Get Current Default Avatar
+      parameters:
+      - in: query
+        name: style
+        schema:
+          type: string
+          enum:
+          - cartoon
+          - realistic
+        description: 'Avatar style: ''realistic'' or ''cartoon'''
+        required: true
+      tags:
+      - avatars
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+          description: ''
+        '400':
+          description: 'Bad Request: Missing or invalid ''style'' query parameter.'
+  /api/v1/avatars/mine/:
+    get:
+      operationId: avatars_mine_list
+      tags:
+      - avatars
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Avatar'
+          description: ''
+  /api/v1/model3d/conversions/{id}/:
+    get:
+      operationId: model3d_conversions_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - model3d
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeDConversion'
+          description: ''
+  /api/v1/model3d/convert/:
+    post:
+      operationId: model3d_convert_create
+      description: Converts a completed OutfitJob image into a downloadable 3D model
+        (.glb) using fal.ai Hunyuan 3D v3.1 Pro.
+      tags:
+      - model3d
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConvertRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConvertRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConvertRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeDConversion'
+          description: ''
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreeDConversion'
+          description: ''
+  /api/v1/model3d/webhook/:
+    post:
+      operationId: model3d_webhook_create
+      tags:
+      - model3d
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/news/:
+    get:
+      operationId: news_list
+      tags:
+      - news
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PostList'
+          description: ''
+  /api/v1/news/{slug}/:
+    get:
+      operationId: news_retrieve
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - news
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostDetail'
+          description: ''
+  /api/v1/outfits/public/{username}/:
+    get:
+      operationId: outfits_public_list
+      description: |-
+        GET /api/v1/outfits/public/<username>/ - a user's saved outfits that they've
+        marked as shared (is_shared=True), for display on their public profile.
+        Shows only the aggregate rating (count/average/breakdown) — not who rated it.
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPublicSavedOutfitList'
+          description: ''
+  /api/v1/outfits/saved/:
+    get:
+      operationId: outfits_saved_list
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SavedOutfit'
+          description: ''
+    post:
+      operationId: outfits_saved_create
+      tags:
+      - outfits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedOutfitCreate'
+          description: ''
+  /api/v1/outfits/saved/{id}/:
+    get:
+      operationId: outfits_saved_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedOutfit'
+          description: ''
+    put:
+      operationId: outfits_saved_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SavedOutfitUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedOutfitUpdate'
+          description: ''
+    patch:
+      operationId: outfits_saved_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSavedOutfitUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSavedOutfitUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSavedOutfitUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedOutfitUpdate'
+          description: ''
+    delete:
+      operationId: outfits_saved_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/outfits/saved/{id}/rate/:
+    post:
+      operationId: outfits_saved_rate_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OutfitRatingRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OutfitRatingRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OutfitRatingRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutfitRating'
+          description: ''
+    delete:
+      operationId: outfits_saved_rate_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/outfits/saved/{id}/ratings/:
+    get:
+      operationId: outfits_saved_ratings_list
+      description: |-
+        GET /api/v1/outfits/saved/<pk>/ratings/ - who rated this outfit and what they
+        gave. Owner-only: strangers only ever see the aggregate via the public
+        profile endpoint, never individual raters' identities.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSavedOutfitRatingDetailList'
+          description: ''
+  /api/v1/outfits/today/:
+    get:
+      operationId: outfits_today_retrieve
+      description: |-
+        Dashboard-triggered lazy daily AUTO OutfitJob generation & retrieval endpoint.
+        GET /api/v1/outfits/today/
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodayOutfit'
+          description: ''
+  /api/v1/outfits/today/reset/:
+    delete:
+      operationId: outfits_today_reset_destroy
+      description: Development/testing endpoint to reset today's AUTO OutfitJob for
+        the authenticated user. Enabled ONLY when DEBUG=True.
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/outfits/try-on/:
+    get:
+      operationId: outfits_try_on_list
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OutfitJob'
+          description: ''
+    post:
+      operationId: outfits_try_on_create
+      tags:
+      - outfits
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TryOnCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TryOnCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TryOnCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TryOnCreate'
+          description: ''
+  /api/v1/outfits/try-on/{id}/status/:
+    get:
+      operationId: outfits_try_on_status_retrieve
+      description: |-
+        DB-ONLY status check endpoint for OutfitJob.
+        Does NOT invoke fal_client, requests, or Cloudinary downloads.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - outfits
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutfitJobStatus'
+          description: ''
+  /api/v1/outfits/try-on/webhook/:
+    post:
+      operationId: outfits_try_on_webhook_create
+      description: DRF APIView subclass supporting async request handlers natively.
+      tags:
+      - outfits
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/schema/:
+    get:
+      operationId: schema_retrieve
+      description: |-
+        OpenApi3 schema for this API. Format can be selected via content negotiation.
+
+        - YAML: application/vnd.oai.openapi
+        - JSON: application/vnd.oai.openapi+json
+      parameters:
+      - in: query
+        name: format
+        schema:
+          type: string
+          enum:
+          - json
+          - yaml
+      - in: query
+        name: lang
+        schema:
+          type: string
+          enum:
+          - af
+          - ar
+          - ar-dz
+          - ast
+          - az
+          - be
+          - bg
+          - bn
+          - br
+          - bs
+          - ca
+          - ckb
+          - cs
+          - cy
+          - da
+          - de
+          - dsb
+          - el
+          - en
+          - en-au
+          - en-gb
+          - eo
+          - es
+          - es-ar
+          - es-co
+          - es-mx
+          - es-ni
+          - es-ve
+          - et
+          - eu
+          - fa
+          - fi
+          - fr
+          - fy
+          - ga
+          - gd
+          - gl
+          - he
+          - hi
+          - hr
+          - hsb
+          - ht
+          - hu
+          - hy
+          - ia
+          - id
+          - ig
+          - io
+          - is
+          - it
+          - ja
+          - ka
+          - kab
+          - kk
+          - km
+          - kn
+          - ko
+          - ky
+          - lb
+          - lt
+          - lv
+          - mk
+          - ml
+          - mn
+          - mr
+          - ms
+          - my
+          - nb
+          - ne
+          - nl
+          - nn
+          - os
+          - pa
+          - pl
+          - pt
+          - pt-br
+          - ro
+          - ru
+          - sk
+          - sl
+          - sq
+          - sr
+          - sr-latn
+          - sv
+          - sw
+          - ta
+          - te
+          - tg
+          - th
+          - tk
+          - tr
+          - tt
+          - udm
+          - ug
+          - uk
+          - ur
+          - uz
+          - vi
+          - zh-hans
+          - zh-hant
+      tags:
+      - schema
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/vnd.oai.openapi:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/yaml:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/vnd.oai.openapi+json:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/settings/:
+    get:
+      operationId: settings_retrieve
+      tags:
+      - settings
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteSettings'
+          description: ''
+  /api/v1/social/search/:
+    get:
+      operationId: social_search_list
+      description: Search users by username or name, e.g. GET /social/search/?q=tuzzo
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: q
+        schema:
+          type: string
+        description: Search term matched against username and name.
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPublicUserList'
+          description: ''
+  /api/v1/social/users/{username}/:
+    get:
+      operationId: social_users_retrieve
+      description: GET /social/users/<username>/ - public profile with follow counts.
+      parameters:
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+          description: ''
+  /api/v1/social/users/{username}/follow/:
+    post:
+      operationId: social_users_follow_create
+      description: POST /social/users/<username>/follow/ to follow, DELETE to unfollow.
+      parameters:
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          description: No response body
+    delete:
+      operationId: social_users_follow_destroy
+      description: POST /social/users/<username>/follow/ to follow, DELETE to unfollow.
+      parameters:
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/social/users/{username}/followers/:
+    get:
+      operationId: social_users_followers_list
+      description: GET /social/users/<username>/followers/ - who follows this user.
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPublicUserList'
+          description: ''
+  /api/v1/social/users/{username}/following/:
+    get:
+      operationId: social_users_following_list
+      description: GET /social/users/<username>/following/ - who this user follows.
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: path
+        name: username
+        schema:
+          type: string
+        required: true
+      tags:
+      - social
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPublicUserList'
+          description: ''
+  /api/v1/wardrobe-items-ai/{id}/status/:
+    get:
+      operationId: wardrobe_items_ai_status_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemAnalysis'
+          description: ''
+  /api/v1/wardrobe-items-ai/items/:
+    get:
+      operationId: wardrobe_items_ai_items_list
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WardrobeItem'
+          description: ''
+    post:
+      operationId: wardrobe_items_ai_items_create
+      tags:
+      - wardrobe-items-ai
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WardrobeItemCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/WardrobeItemCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/WardrobeItemCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardrobeItemCreate'
+          description: ''
+  /api/v1/wardrobe-items-ai/items/{id}/:
+    get:
+      operationId: wardrobe_items_ai_items_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardrobeItem'
+          description: ''
+    delete:
+      operationId: wardrobe_items_ai_items_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/wardrobe-items-ai/items/{id}/save/:
+    post:
+      operationId: wardrobe_items_ai_items_save_create
+      description: Save a completed wardrobe item analysis result permanently to Cloudinary
+        storage.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardrobeItem'
+          description: ''
+  /api/v1/wardrobe-items-ai/webhook/bg-removal/:
+    post:
+      operationId: wardrobe_items_ai_webhook_bg_removal_create
+      description: |-
+        DRF APIView subclass that natively supports async handlers (async def post, etc.)
+        by making dispatch itself an async method and awaiting the handler coroutine.
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/wardrobe-items-ai/webhook/vision/:
+    post:
+      operationId: wardrobe_items_ai_webhook_vision_create
+      description: |-
+        DRF APIView subclass that natively supports async handlers (async def post, etc.)
+        by making dispatch itself an async method and awaiting the handler coroutine.
+      tags:
+      - wardrobe-items-ai
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/wardrobe/options/:
+    get:
+      operationId: wardrobe_options_retrieve
+      tags:
+      - wardrobe
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardrobeOptions'
+          description: ''
+components:
+  schemas:
+    Aesthetic:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        image:
+          type: string
+          format: uri
+          nullable: true
+          readOnly: true
+      required:
+      - id
+      - image
+      - name
+    Avatar:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        gender:
+          readOnly: true
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/Gender0acEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        style:
+          allOf:
+          - $ref: '#/components/schemas/StyleEnum'
+          readOnly: true
+          default: realistic
+        is_default:
+          type: boolean
+          readOnly: true
+          default: false
+        is_preferred:
+          type: boolean
+          readOnly: true
+        is_saved:
+          type: boolean
+          readOnly: true
+        source_photo:
+          type: string
+          format: uri
+          nullable: true
+          readOnly: true
+        result_image:
+          type: string
+          format: uri
+          nullable: true
+          readOnly: true
+        fal_cdn_url:
+          type: string
+          format: uri
+          readOnly: true
+          nullable: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - error_message
+      - fal_cdn_url
+      - gender
+      - id
+      - is_default
+      - is_preferred
+      - is_saved
+      - result_image
+      - source_photo
+      - status
+      - style
+      - updated_at
+    AvatarCreate:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        source_photo:
+          type: string
+          format: uri
+        style:
+          allOf:
+          - $ref: '#/components/schemas/StyleEnum'
+          default: realistic
+      required:
+      - id
+      - source_photo
+    AvatarCreateRequest:
+      type: object
+      properties:
+        source_photo:
+          type: string
+          format: binary
+        style:
+          allOf:
+          - $ref: '#/components/schemas/StyleEnum'
+          default: realistic
+      required:
+      - source_photo
+    BlankEnum:
+      enum:
+      - ''
+    BodyTypeEnum:
+      enum:
+      - slim
+      - athletic
+      - average
+      - curvy
+      - plus_size
+      type: string
+      description: |-
+        * `slim` - Slim
+        * `athletic` - Athletic
+        * `average` - Average
+        * `curvy` - Curvy
+        * `plus_size` - Plus Size
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        slug:
+          oneOf:
+          - type: string
+            maxLength: 50
+            pattern: ^[-a-zA-Z0-9_]+$
+          - type: string
+            maxLength: 0
+      required:
+      - id
+      - name
+    ChangePasswordRequest:
+      type: object
+      properties:
+        old_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - new_password
+      - new_password_confirm
+      - old_password
+    CompleteProfile:
+      type: object
+      properties:
+        age:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/Gender0acEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        height:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+          description: Height in centimeters.
+        body_type:
+          oneOf:
+          - $ref: '#/components/schemas/BodyTypeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        country:
+          type: string
+          maxLength: 100
+        aesthetics:
+          type: array
+          items:
+            type: integer
+    ConvertRequestRequest:
+      type: object
+      properties:
+        outfit_job_id:
+          type: integer
+          description: ID of the completed OutfitJob to convert into 3D.
+      required:
+      - outfit_job_id
+    DeleteAccountRequest:
+      type: object
+      properties:
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - password
+    ForgotPasswordRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+      required:
+      - email
+    Gender0acEnum:
+      enum:
+      - male
+      - female
+      - other
+      type: string
+      description: |-
+        * `male` - Male
+        * `female` - Female
+        * `other` - Other
+    ItemAnalysis:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        wardrobe_item:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        is_saved:
+          type: boolean
+          readOnly: true
+        display_url:
+          type: string
+          readOnly: true
+        fal_cdn_url:
+          type: string
+          format: uri
+          readOnly: true
+        processed_image:
+          type: string
+          readOnly: true
+        color:
+          type: string
+          readOnly: true
+        description:
+          type: string
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - color
+      - created_at
+      - description
+      - display_url
+      - error_message
+      - fal_cdn_url
+      - id
+      - is_saved
+      - processed_image
+      - status
+      - updated_at
+      - wardrobe_item
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - password
+    NullEnum:
+      enum:
+      - null
+    OccasionEnum:
+      enum:
+      - casual
+      - formal
+      - party
+      - sport
+      - wedding
+      - work
+      type: string
+      description: |-
+        * `casual` - Casual
+        * `formal` - Formal
+        * `party` - Party
+        * `sport` - Sport
+        * `wedding` - Wedding
+        * `work` - Work
+    OutfitJob:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        generated_date:
+          type: string
+          format: date
+          readOnly: true
+        trigger_type:
+          allOf:
+          - $ref: '#/components/schemas/TriggerTypeEnum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        avatar:
+          type: integer
+          readOnly: true
+        wardrobe_items:
+          type: array
+          items:
+            type: integer
+          readOnly: true
+        result_image:
+          type: string
+          nullable: true
+          readOnly: true
+        reasoning_title:
+          type: string
+          readOnly: true
+        reasoning_subtitle:
+          type: string
+          readOnly: true
+        reasoning_items:
+          readOnly: true
+        reasoning_note:
+          type: string
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - avatar
+      - created_at
+      - error_message
+      - generated_date
+      - id
+      - reasoning_items
+      - reasoning_note
+      - reasoning_subtitle
+      - reasoning_title
+      - result_image
+      - status
+      - trigger_type
+      - updated_at
+      - wardrobe_items
+    OutfitJobStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        result_image:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+      required:
+      - result_image
+      - status
+    OutfitRating:
+      type: object
+      properties:
+        color_harmony:
+          type: integer
+          maximum: 10
+          minimum: 0
+        trendy:
+          type: integer
+          maximum: 10
+          minimum: 0
+        overall_matching:
+          type: integer
+          maximum: 10
+          minimum: 0
+        accessories:
+          type: integer
+          maximum: 10
+          minimum: 0
+      required:
+      - accessories
+      - color_harmony
+      - overall_matching
+      - trendy
+    OutfitRatingRequest:
+      type: object
+      properties:
+        color_harmony:
+          type: integer
+          maximum: 10
+          minimum: 0
+        trendy:
+          type: integer
+          maximum: 10
+          minimum: 0
+        overall_matching:
+          type: integer
+          maximum: 10
+          minimum: 0
+        accessories:
+          type: integer
+          maximum: 10
+          minimum: 0
+      required:
+      - accessories
+      - color_harmony
+      - overall_matching
+      - trendy
+    PaginatedPublicSavedOutfitList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSavedOutfit'
+    PaginatedPublicUserList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicUser'
+    PaginatedSavedOutfitRatingDetailList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SavedOutfitRatingDetail'
+    PatchedCompleteProfileRequest:
+      type: object
+      properties:
+        age:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        gender:
+          oneOf:
+          - $ref: '#/components/schemas/Gender0acEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        height:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+          description: Height in centimeters.
+        body_type:
+          oneOf:
+          - $ref: '#/components/schemas/BodyTypeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        country:
+          type: string
+          maxLength: 100
+        aesthetics:
+          type: array
+          items:
+            type: integer
+    PatchedSavedOutfitUpdateRequest:
+      type: object
+      properties:
+        saved_date:
+          type: string
+          format: date
+          description: Date for which the outfit is saved.
+        outfit_job_id:
+          type: integer
+          description: ID of a completed OutfitJob belonging to the user.
+        note:
+          type: string
+        is_shared:
+          type: boolean
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+    PatchedUpdateProfileRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        profile_image:
+          type: string
+          format: binary
+          nullable: true
+    PostDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        title:
+          type: string
+          maxLength: 200
+        slug:
+          oneOf:
+          - type: string
+            maxLength: 50
+            pattern: ^[-a-zA-Z0-9_]+$
+          - type: string
+            maxLength: 0
+        featured_image:
+          type: string
+          format: uri
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - content
+      - created_at
+      - featured_image
+      - id
+      - title
+      - updated_at
+    PostList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        title:
+          type: string
+          maxLength: 200
+        slug:
+          oneOf:
+          - type: string
+            maxLength: 50
+            pattern: ^[-a-zA-Z0-9_]+$
+          - type: string
+            maxLength: 0
+        featured_image:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - featured_image
+      - id
+      - title
+    PublicSavedOutfit:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        saved_date:
+          type: string
+          format: date
+          readOnly: true
+        note:
+          type: string
+          readOnly: true
+        outfit_job:
+          allOf:
+          - $ref: '#/components/schemas/OutfitJob'
+          readOnly: true
+        ratings_count:
+          type: integer
+          readOnly: true
+          default: 0
+        average_rating:
+          type: number
+          format: double
+          nullable: true
+          readOnly: true
+        rating_breakdown:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+            nullable: true
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - average_rating
+      - created_at
+      - id
+      - note
+      - outfit_job
+      - rating_breakdown
+      - ratings_count
+      - saved_date
+    PublicUser:
+      type: object
+      description: |-
+        User card for search results / followers / following lists / public profile.
+
+        followers_count, following_count and is_following are expected to be annotated
+        on the queryset by the view (see social/views.py) to avoid N+1 queries.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        avatar_url:
+          type: string
+          readOnly: true
+        followers_count:
+          type: integer
+          readOnly: true
+          default: 0
+        following_count:
+          type: integer
+          readOnly: true
+          default: 0
+        shared_outfits_count:
+          type: integer
+          readOnly: true
+          default: 0
+        is_following:
+          type: boolean
+          readOnly: true
+          default: false
+      required:
+      - avatar_url
+      - followers_count
+      - following_count
+      - id
+      - is_following
+      - name
+      - shared_outfits_count
+      - username
+    PurposeEnum:
+      enum:
+      - email_verification
+      - password_reset
+      type: string
+      description: |-
+        * `email_verification` - Email Verification
+        * `password_reset` - Password Reset
+    Rater:
+      type: object
+      description: Small user card identifying who submitted a rating.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        avatar_url:
+          type: string
+          readOnly: true
+      required:
+      - avatar_url
+      - id
+      - name
+      - username
+    RegisterRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - name
+      - password
+    ResendOTPRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        purpose:
+          $ref: '#/components/schemas/PurposeEnum'
+      required:
+      - email
+      - purpose
+    ResetPasswordRequest:
+      type: object
+      properties:
+        reset_token:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - new_password
+      - new_password_confirm
+      - reset_token
+    SavedOutfit:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        saved_date:
+          type: string
+          format: date
+          readOnly: true
+        note:
+          type: string
+          readOnly: true
+        is_shared:
+          type: boolean
+          readOnly: true
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+        outfit_job:
+          allOf:
+          - $ref: '#/components/schemas/OutfitJob'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - is_shared
+      - note
+      - outfit_job
+      - saved_date
+      - updated_at
+    SavedOutfitCreate:
+      type: object
+      properties:
+        outfit_job_id:
+          type: integer
+          description: ID of a completed OutfitJob belonging to the user.
+        saved_date:
+          type: string
+          format: date
+          description: Date for which the outfit is saved.
+        note:
+          type: string
+        is_shared:
+          type: boolean
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+      required:
+      - outfit_job_id
+      - saved_date
+    SavedOutfitCreateRequest:
+      type: object
+      properties:
+        outfit_job_id:
+          type: integer
+          description: ID of a completed OutfitJob belonging to the user.
+        saved_date:
+          type: string
+          format: date
+          description: Date for which the outfit is saved.
+        note:
+          type: string
+        is_shared:
+          type: boolean
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+      required:
+      - outfit_job_id
+      - saved_date
+    SavedOutfitRatingDetail:
+      type: object
+      description: |-
+        One individual rating with who gave it — only ever shown to the outfit's
+        owner (see SavedOutfitRatingsListView), never on the public profile.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        rater:
+          allOf:
+          - $ref: '#/components/schemas/Rater'
+          readOnly: true
+        color_harmony:
+          type: integer
+          readOnly: true
+        trendy:
+          type: integer
+          readOnly: true
+        overall_matching:
+          type: integer
+          readOnly: true
+        accessories:
+          type: integer
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - accessories
+      - color_harmony
+      - created_at
+      - id
+      - overall_matching
+      - rater
+      - trendy
+    SavedOutfitUpdate:
+      type: object
+      properties:
+        saved_date:
+          type: string
+          format: date
+          description: Date for which the outfit is saved.
+        outfit_job_id:
+          type: integer
+          description: ID of a completed OutfitJob belonging to the user.
+        note:
+          type: string
+        is_shared:
+          type: boolean
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+    SavedOutfitUpdateRequest:
+      type: object
+      properties:
+        saved_date:
+          type: string
+          format: date
+          description: Date for which the outfit is saved.
+        outfit_job_id:
+          type: integer
+          description: ID of a completed OutfitJob belonging to the user.
+        note:
+          type: string
+        is_shared:
+          type: boolean
+          description: When on, this saved outfit is visible on the user's public
+            profile.
+    SeasonEnum:
+      enum:
+      - summer
+      - winter
+      - spring
+      - autumn
+      - all_season
+      type: string
+      description: |-
+        * `summer` - Summer
+        * `winter` - Winter
+        * `spring` - Spring
+        * `autumn` - Autumn
+        * `all_season` - All Season
+    SiteSettings:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        privacy_policy:
+          type: string
+        about_us:
+          type: string
+        terms_and_conditions:
+          type: string
+        contact_email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        contact_phone:
+          type: string
+          maxLength: 30
+        address:
+          type: string
+          maxLength: 255
+        facebook_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        instagram_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        tiktok_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        youtube_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        twitter_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        linkedin_url:
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 200
+          - type: string
+            maxLength: 0
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - id
+      - updated_at
+    StatusEnum:
+      enum:
+      - pending
+      - processing
+      - done
+      - failed
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `processing` - Processing
+        * `done` - Done
+        * `failed` - Failed
+    StyleEnum:
+      enum:
+      - realistic
+      - cartoon
+      type: string
+      description: |-
+        * `realistic` - Realistic
+        * `cartoon` - Cartoon
+    SystemDefaultAvatarAdminGenderEnum:
+      enum:
+      - male
+      - female
+      type: string
+      description: |-
+        * `male` - male
+        * `female` - female
+    SystemDefaultAvatarAdminRequest:
+      type: object
+      properties:
+        gender:
+          $ref: '#/components/schemas/SystemDefaultAvatarAdminGenderEnum'
+        style:
+          $ref: '#/components/schemas/StyleEnum'
+        image:
+          type: string
+          format: binary
+      required:
+      - gender
+      - image
+      - style
+    ThreeDConversion:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        outfit_job:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        fal_request_id:
+          type: string
+          readOnly: true
+          nullable: true
+        result_mesh_url:
+          type: string
+          format: uri
+          readOnly: true
+          nullable: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - error_message
+      - fal_request_id
+      - id
+      - outfit_job
+      - result_mesh_url
+      - status
+      - updated_at
+    TodayOutfit:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        date:
+          type: string
+          format: date
+          readOnly: true
+        trigger_type:
+          allOf:
+          - $ref: '#/components/schemas/TriggerTypeEnum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        avatar:
+          type: integer
+          readOnly: true
+        wardrobe_items:
+          type: array
+          items:
+            type: integer
+          readOnly: true
+        result_image:
+          type: string
+          nullable: true
+          readOnly: true
+        reasoning_title:
+          type: string
+          readOnly: true
+        reasoning_subtitle:
+          type: string
+          readOnly: true
+        reasoning_items:
+          readOnly: true
+        reasoning_note:
+          type: string
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - avatar
+      - created_at
+      - date
+      - error_message
+      - id
+      - reasoning_items
+      - reasoning_note
+      - reasoning_subtitle
+      - reasoning_title
+      - result_image
+      - status
+      - trigger_type
+      - updated_at
+      - wardrobe_items
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    TriggerTypeEnum:
+      enum:
+      - manual
+      - auto
+      type: string
+      description: |-
+        * `manual` - Manual
+        * `auto` - Auto
+    TryOnCreate:
+      type: object
+      properties:
+        avatar_id:
+          type: integer
+          nullable: true
+          description: 'ID of the Avatar belonging to the user. Optional: defaults
+            to user''s preferred avatar.'
+        wardrobe_item_ids:
+          type: array
+          items:
+            type: integer
+          description: List of WardrobeItem IDs to try on (max 1 item per category).
+      required:
+      - wardrobe_item_ids
+    TryOnCreateRequest:
+      type: object
+      properties:
+        avatar_id:
+          type: integer
+          nullable: true
+          description: 'ID of the Avatar belonging to the user. Optional: defaults
+            to user''s preferred avatar.'
+        wardrobe_item_ids:
+          type: array
+          items:
+            type: integer
+          description: List of WardrobeItem IDs to try on (max 1 item per category).
+      required:
+      - wardrobe_item_ids
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        avatar_url:
+          type: string
+          readOnly: true
+        is_email_verified:
+          type: boolean
+          readOnly: true
+        is_profile_completed:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - avatar_url
+      - created_at
+      - email
+      - id
+      - is_email_verified
+      - is_profile_completed
+      - name
+      - username
+    VerifyEmailRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+      required:
+      - email
+      - otp
+    VerifyResetOTPRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+      required:
+      - email
+      - otp
+    WardrobeItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        image:
+          type: string
+          format: uri
+          nullable: true
+          readOnly: true
+        category:
+          allOf:
+          - $ref: '#/components/schemas/Category'
+          readOnly: true
+        season:
+          allOf:
+          - $ref: '#/components/schemas/SeasonEnum'
+          readOnly: true
+        occasion:
+          allOf:
+          - $ref: '#/components/schemas/OccasionEnum'
+          readOnly: true
+        purchase_source:
+          type: string
+          readOnly: true
+        analysis:
+          allOf:
+          - $ref: '#/components/schemas/ItemAnalysis'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - analysis
+      - category
+      - created_at
+      - id
+      - image
+      - occasion
+      - purchase_source
+      - season
+    WardrobeItemCreate:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        image:
+          type: string
+          format: uri
+        category:
+          type: string
+          description: Category ID (integer) or category name/slug (e.g. 'shoes',
+            'tops').
+        season:
+          oneOf:
+          - $ref: '#/components/schemas/SeasonEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        occasion:
+          oneOf:
+          - $ref: '#/components/schemas/OccasionEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        purchase_source:
+          type: string
+          maxLength: 255
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - category
+      - created_at
+      - id
+      - image
+    WardrobeItemCreateRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          format: binary
+        category:
+          type: string
+          description: Category ID (integer) or category name/slug (e.g. 'shoes',
+            'tops').
+        season:
+          oneOf:
+          - $ref: '#/components/schemas/SeasonEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        occasion:
+          oneOf:
+          - $ref: '#/components/schemas/OccasionEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        purchase_source:
+          type: string
+          maxLength: 255
+      required:
+      - category
+      - image
+    WardrobeOptions:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        seasons:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        occasions:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+      required:
+      - categories
+      - occasions
+      - seasons
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
