@@ -5,7 +5,7 @@ def add_shoes_category(apps, schema_editor):
     Category = apps.get_model("wardrobe", "Category")
     Category.objects.get_or_create(
         name="Shoes",
-        defaults={"slug": "shoes", "is_active": True},
+        defaults={"is_active": True},
     )
 
 

@@ -5,38 +5,14 @@ from wardrobe.serializers import CategorySerializer
 from .models import ItemAnalysis, WardrobeItem
 
 
-@extend_schema_field(OpenApiTypes.STR)
-class CategorySlugOrPKRelatedField(serializers.RelatedField):
-    def get_queryset(self):
-        return Category.objects.all()
 
-    def to_internal_value(self, data):
-        if isinstance(data, Category):
-            return data
-
-        val_str = str(data).strip()
-        if val_str.isdigit():
-            try:
-                return Category.objects.get(pk=int(val_str))
-            except Category.DoesNotExist:
-                raise serializers.ValidationError(f"Category with ID {val_str} does not exist.")
-
-        try:
-            return Category.objects.get(slug__iexact=val_str)
-        except Category.DoesNotExist:
-            pass
-
-        try:
-            return Category.objects.get(name__iexact=val_str)
-        except Category.DoesNotExist:
-            raise serializers.ValidationError(f"Category '{val_str}' does not exist.")
-
-    def to_representation(self, value):
-        return value.pk
 
 
 class WardrobeItemCreateSerializer(serializers.ModelSerializer):
-    category = CategorySlugOrPKRelatedField(help_text="Category ID (integer) or category name/slug (e.g. 'shoes', 'tops').")
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        help_text="Category ID (integer)."
+    )
 
     class Meta:
         model = WardrobeItem

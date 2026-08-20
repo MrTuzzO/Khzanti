@@ -37,7 +37,7 @@ class WardrobeItemOnDemandCloudinaryTests(APITestCase):
         self.other_user = User.objects.create_user(
             username="otheruser", name="Other User", email="otheruser@example.com", password="password123"
         )
-        self.category = Category.objects.create(name="Tops", slug="tops")
+        self.category = Category.objects.create(name="Tops")
         self.client.force_authenticate(user=self.user)
 
     # Test 1: User uploads wardrobe item -> WardrobeItem.image uploaded to Cloudinary
