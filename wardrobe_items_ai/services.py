@@ -153,18 +153,7 @@ async def submit_vision_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
     wardrobe_item_obj = await sync_to_async(lambda: analysis.wardrobe_item)()
     category_obj = await sync_to_async(lambda: getattr(wardrobe_item_obj, "category", None))()
     category_name = getattr(category_obj, "name", "clothing item") if category_obj else "clothing item"
-    category_slug = getattr(category_obj, "slug", "") if category_obj else ""
-
-    logger.info(
-        "[WARDROBE AI DEBUG] item_id=%s analysis_id=%s category_id=%s category_name=%s category_slug=%s",
-        getattr(wardrobe_item_obj, "id", None),
-        analysis.id,
-        getattr(category_obj, "id", None),
-        category_name,
-        category_slug,
-    )
-
-    category_term = f"{category_name} ({category_slug})" if (category_slug and category_slug.lower() != category_name.lower()) else category_name
+    category_term = category_name
 
     prompt = (
         f"Analyze this image of a clothing or wardrobe item.\n"

@@ -62,7 +62,7 @@ class TryOnSaveAPITestCase(APITestCase):
             is_saved=True,
         )
 
-        self.category, _ = Category.objects.get_or_create(name="Tops", defaults={"slug": "tops"})
+        self.category, _ = Category.objects.get_or_create(name="Tops")
         self.dummy_image = SimpleUploadedFile(
             name="top.png",
             content=VALID_PNG_BYTES,

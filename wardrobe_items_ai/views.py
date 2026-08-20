@@ -92,7 +92,7 @@ class WardrobeItemListCreateView(generics.ListCreateAPIView):
             if category_param.isdigit():
                 qs = qs.filter(category_id=int(category_param))
             else:
-                qs = qs.filter(category__name__iexact=category_param) | qs.filter(category__slug__iexact=category_param)
+                qs = qs.filter(category__name__iexact=category_param)
 
         if season_param:
             qs = qs.filter(season__iexact=season_param)
