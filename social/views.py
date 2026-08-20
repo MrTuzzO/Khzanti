@@ -77,6 +77,7 @@ class FollowActionView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT})
     def post(self, request, username):
         target = get_object_or_404(User, username=username, is_active=True)
         if target == request.user:
@@ -88,6 +89,7 @@ class FollowActionView(APIView):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
     def delete(self, request, username):
         target = get_object_or_404(User, username=username)
         Follow.objects.filter(follower=request.user, following=target).delete()
