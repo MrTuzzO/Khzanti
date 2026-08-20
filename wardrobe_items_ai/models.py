@@ -16,7 +16,7 @@ class WardrobeItem(models.Model):
         on_delete=models.CASCADE,
         related_name="wardrobe_items",
     )
-    image = models.ImageField(upload_to="wardrobe_items/originals/", max_length="500")
+    image = models.ImageField(upload_to="wardrobe_items/originals/", max_length=500)
     category = models.ForeignKey(
         Category,
         on_delete=models.PROTECT,
