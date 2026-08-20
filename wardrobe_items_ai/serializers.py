@@ -67,8 +67,6 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
             "display_url",
             "fal_cdn_url",
             "processed_image",
-            "is_saved",
-            "saved",
             "color",
             "description",
             "error_message",
