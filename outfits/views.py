@@ -16,7 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from datetime import date as date_type
+from datetime import date as date_type, timedelta
 
 from accounts.models import User
 from core.exceptions import ServiceError
@@ -532,3 +532,26 @@ class SavedOutfitRatingsListView(generics.ListAPIView):
             .select_related("rater")
             .order_by("-created_at")
         )
+
+
+class OneMonthOutfitHistoryView(generics.ListAPIView):
+    """
+    GET /api/v1/outfits/1-months/
+    Returns the authenticated user's outfit jobs created in the last 30 days.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = OutfitJobSerializer
+
+    def get_queryset(self):
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        return (
+            OutfitJob.objects.filter(
+                user=self.request.user,
+                created_at__gte=thirty_days_ago,
+            )
+            .select_related("avatar")
+            .prefetch_related("wardrobe_items")
+            .order_by("-created_at")
+        )
+
