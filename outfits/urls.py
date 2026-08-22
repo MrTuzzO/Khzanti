@@ -1,5 +1,6 @@
-from django.urls import path
+from django.urls import path, re_path
 from .views import (
+    OneMonthOutfitHistoryView,
     PublicSavedOutfitListView,
     RateSavedOutfitView,
     SavedOutfitDetailView,
@@ -16,7 +17,9 @@ from .views import (
 app_name = "outfits"
 
 urlpatterns = [
+    path("1-months/", OneMonthOutfitHistoryView.as_view(), name="outfit-history-1-months"),
     path("today/", TodayOutfitView.as_view(), name="today-outfit"),
+
     path("today/reset/", TodayOutfitResetView.as_view(), name="today-outfit-reset"),
     path("try-on/", TryOnCreateView.as_view(), name="try-on-create"),
     path("try-on/<int:pk>/status/", TryOnStatusView.as_view(), name="try-on-status"),
@@ -28,4 +31,5 @@ urlpatterns = [
     path("saved/<int:pk>/ratings/", SavedOutfitRatingsListView.as_view(), name="saved-outfit-ratings-list"),
     path("public/<str:username>/", PublicSavedOutfitListView.as_view(), name="public-saved-outfits"),
 ]
+
 
