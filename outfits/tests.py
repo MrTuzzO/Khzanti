@@ -1,10 +1,13 @@
+from datetime import timedelta
 import io
 from unittest.mock import MagicMock, patch
 from PIL import Image
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
+
 
 from avatars.models import Avatar
 from outfits.models import JobStatus, OutfitJob, TriggerType
@@ -346,3 +349,84 @@ class TryOnSaveAPITestCase(APITestCase):
 
         job.refresh_from_db()
         self.assertFalse(job.is_saved)
+
+
+class OneMonthOutfitHistoryAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="user1month@example.com",
+            name="1Month User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="other1month@example.com",
+            name="Other User",
+            password="password123",
+        )
+        self.avatar = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+
+    def test_unauthenticated_request_rejected(self):
+        response = self.client.get("/api/v1/outfits/1-months/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_empty_history_returns_200_empty_list(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get("/api/v1/outfits/1-months/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+
+    def test_authenticated_user_receives_outfits_within_last_30_days_and_excludes_older_and_other_users(self):
+        self.client.force_authenticate(user=self.user)
+
+        now = timezone.now()
+
+        # Job 1: Recent job created 2 days ago
+        recent_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+        OutfitJob.objects.filter(pk=recent_job.pk).update(created_at=now - timedelta(days=2))
+
+        # Job 2: Recent job created today
+        today_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+        )
+        OutfitJob.objects.filter(pk=today_job.pk).update(created_at=now)
+
+        # Job 3: Old job created 35 days ago (older than 30 days)
+        old_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+        OutfitJob.objects.filter(pk=old_job.pk).update(created_at=now - timedelta(days=35))
+
+        # Job 4: Other user's job created today
+        other_user_job = OutfitJob.objects.create(
+            user=self.other_user,
+            avatar=self.avatar,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+        OutfitJob.objects.filter(pk=other_user_job.pk).update(created_at=now)
+
+        response = self.client.get("/api/v1/outfits/1-months/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        retrieved_ids = [item["id"] for item in response.data]
+        self.assertEqual(len(retrieved_ids), 2)
+        self.assertEqual(retrieved_ids, [today_job.id, recent_job.id])
+        self.assertNotIn(old_job.id, retrieved_ids)
+        self.assertNotIn(other_user_job.id, retrieved_ids)
+
