@@ -116,8 +116,8 @@ class SavedOutfit(models.Model):
         verbose_name_plural = "Saved Outfits"
         constraints = [
             models.UniqueConstraint(
-                fields=["user", "date"],
-                name="unique_saved_outfit_per_user_per_date",
+                fields=["user", "outfit_job"],
+                name="unique_saved_outfit_per_user_per_job",
             )
         ]
         indexes = [

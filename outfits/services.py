@@ -10,7 +10,7 @@ import fal_client
 from avatars.models import Avatar
 from core.exceptions import ServiceError
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob, TriggerType
+from .models import JobStatus, OutfitJob, SavedOutfit, TriggerType
 
 logger = logging.getLogger(__name__)
 
@@ -145,39 +145,48 @@ def submit_try_on_job(job: OutfitJob) -> OutfitJob:
     return async_to_sync(submit_try_on_job_async)(job)
 
 
-def save_try_on_to_cloudinary(job: OutfitJob) -> OutfitJob:
+def save_try_on_to_cloudinary(job: OutfitJob, saved_date=None) -> OutfitJob:
     """
-    Explicitly downloads the generated try-on result image from fal.ai CDN URL and uploads it to Cloudinary storage.
-    Idempotent: if already saved, returns immediately without re-uploading.
+    Explicitly downloads the generated try-on result image from fal.ai CDN URL and uploads it to Cloudinary storage,
+    sets is_saved=True, and creates the corresponding SavedOutfit entry for the user.
     Works for both MANUAL and AUTO try-ons.
     """
-    if job.is_saved:
-        return job
-
     url_to_download = job.fal_cdn_url or (job.result_image.url if job.result_image else "")
-    if not url_to_download:
+    if not url_to_download and not job.is_saved:
         raise ServiceError(
             detail="Try-on job does not have a valid generated image to save.",
             status_code=400,
         )
 
-    try:
-        img_resp = requests.get(url_to_download, timeout=30)
-        img_resp.raise_for_status()
+    with transaction.atomic():
+        if not job.is_saved:
+            try:
+                if not job.result_image and url_to_download:
+                    img_resp = requests.get(url_to_download, timeout=30)
+                    img_resp.raise_for_status()
 
-        filename = f"outfit_tryon_{job.id}.png"
-        job.result_image.save(filename, ContentFile(img_resp.content), save=False)
-        job.is_saved = True
-        job.save(update_fields=["result_image", "is_saved", "updated_at"])
-    except ServiceError:
-        raise
-    except Exception as exc:
-        raw_error = str(exc)
-        logger.error("OutfitJob %s save to Cloudinary failed: %s", job.id, raw_error, exc_info=True)
-        raise ServiceError(
-            detail="Failed to save try-on image. Please try again later.",
-            debug_detail=raw_error,
-            status_code=502,
+                    filename = f"outfit_tryon_{job.id}.png"
+                    job.result_image.save(filename, ContentFile(img_resp.content), save=False)
+
+                job.is_saved = True
+                job.save(update_fields=["result_image", "is_saved", "updated_at"])
+            except ServiceError:
+                raise
+            except Exception as exc:
+                raw_error = str(exc)
+                logger.error("OutfitJob %s save to Cloudinary failed: %s", job.id, raw_error, exc_info=True)
+                raise ServiceError(
+                    detail="Failed to save try-on image. Please try again later.",
+                    debug_detail=raw_error,
+                    status_code=502,
+                )
+
+        from django.utils import timezone
+        target_date = saved_date or job.scheduled_date or timezone.now().date()
+        SavedOutfit.objects.get_or_create(
+            user=job.user,
+            outfit_job=job,
+            defaults={"date": target_date},
         )
 
     return job

@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'core.middleware.ApiExceptionMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -153,6 +154,21 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+
+import sys
+
+if "test" in sys.argv:
+    try:
+        import cloudinary.uploader
+        cloudinary.uploader.upload = lambda *args, **kwargs: {
+            "public_id": "test_public_id",
+            "url": "https://res.cloudinary.com/test_cloud/image/upload/v12345/test.png",
+            "secure_url": "https://res.cloudinary.com/test_cloud/image/upload/v12345/test.png",
+            "format": "png",
+            "resource_type": "image",
+        }
+    except Exception:
+        pass
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS').split(',')
 CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
