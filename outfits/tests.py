@@ -430,3 +430,370 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
         self.assertNotIn(old_job.id, retrieved_ids)
         self.assertNotIn(other_user_job.id, retrieved_ids)
 
+
+import json
+from django.conf import settings
+from accounts.models import CustomerProfile, Gender, Aesthetic
+from outfits.services import (
+    filter_eligible_wardrobe_items,
+    validate_outfit_composition,
+    validate_outfit_semantic_suitability,
+    analyze_garment_semantics,
+    categorize_item_semantics,
+    select_auto_tryon_assets,
+    select_auto_outfit_combination,
+    get_profile_constraints,
+    resolve_tryon_avatar,
+    get_or_create_today_auto_job,
+)
+
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
+    def setUp(self):
+
+        self.male_user = User.objects.create_user(
+            email="maleuser@example.com",
+            name="Male User",
+            password="Password123!",
+        )
+        self.male_profile, _ = CustomerProfile.objects.get_or_create(
+            user=self.male_user,
+            defaults={
+                "gender": Gender.MALE,
+                "age": 25,
+                "country": "Bangladesh",
+                "body_type": "average",
+                "height": 175,
+            }
+        )
+
+        self.female_user = User.objects.create_user(
+            email="femaleuser@example.com",
+            name="Female User",
+            password="Password123!",
+        )
+        self.female_profile, _ = CustomerProfile.objects.get_or_create(
+            user=self.female_user,
+            defaults={
+                "gender": Gender.FEMALE,
+                "age": 24,
+                "country": "Bangladesh",
+                "body_type": "slim",
+                "height": 165,
+            }
+        )
+        minimalist_aesthetic, _ = Aesthetic.objects.get_or_create(name="Minimalist")
+        self.female_profile.aesthetics.add(minimalist_aesthetic)
+
+        self.cat_tops, _ = Category.objects.get_or_create(name="Tops & T-Shirts")
+        self.cat_bottoms, _ = Category.objects.get_or_create(name="Bottoms & Pants")
+        self.cat_dresses, _ = Category.objects.get_or_create(name="Dresses")
+        self.cat_kaftan, _ = Category.objects.get_or_create(name="Kaftan")
+        self.cat_outerwear, _ = Category.objects.get_or_create(name="Outerwear")
+        self.cat_shoes, _ = Category.objects.get_or_create(name="Shoes")
+
+    def _create_item(self, user, category, description="", color=""):
+        img = SimpleUploadedFile("item.jpg", b"image_data", content_type="image/jpeg")
+        item = WardrobeItem.objects.create(
+            user=user,
+            category=category,
+            image=img,
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url=f"https://v3b.fal.media/item_{item.id}.png",
+            description=description,
+            color=color,
+            is_saved=False,
+        )
+        return item
+
+
+    def test_profile_constraints_resolved_from_customer_profile(self, *args):
+        constraints = get_profile_constraints(self.female_user)
+        self.assertEqual(constraints["gender"], "female")
+        self.assertIn("Minimalist", constraints["aesthetics"])
+
+    def test_male_user_eligible_filtering_excludes_dresses(self, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+        dress = self._create_item(self.male_user, self.cat_dresses)
+
+        all_items = [top, bottom, dress]
+        constraints = get_profile_constraints(self.male_user)
+        eligible = filter_eligible_wardrobe_items(all_items, constraints)
+
+        self.assertIn(top, eligible)
+        self.assertIn(bottom, eligible)
+        self.assertNotIn(dress, eligible)
+
+    def test_outfit_composition_validation_rules(self, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+        dress = self._create_item(self.female_user, self.cat_dresses)
+        shoes = self._create_item(self.male_user, self.cat_shoes)
+
+        # 1. Top + Bottom + Shoes -> Valid
+        valid_2pc, _ = validate_outfit_composition([top, bottom, shoes])
+        self.assertTrue(valid_2pc)
+
+        # 2. Dress + Shoes -> Valid
+        valid_dress, _ = validate_outfit_composition([dress, shoes])
+        self.assertTrue(valid_dress)
+
+        # 3. Dress + Bottom -> Invalid
+        invalid_dress_pants, _ = validate_outfit_composition([dress, bottom])
+        self.assertFalse(invalid_dress_pants)
+
+        # 4. Top + Top -> Invalid
+        invalid_top_top, _ = validate_outfit_composition([top, top])
+        self.assertFalse(invalid_top_top)
+
+        # 5. Shoes only -> Invalid
+        invalid_shoes_only, _ = validate_outfit_composition([shoes])
+        self.assertFalse(invalid_shoes_only)
+
+        # 6. Top alone -> Valid (Incomplete wardrobe support)
+        valid_top_alone, _ = validate_outfit_composition([top])
+        self.assertTrue(valid_top_alone)
+
+        # 7. Bottom alone -> Valid (Incomplete wardrobe support)
+        valid_bottom_alone, _ = validate_outfit_composition([bottom])
+        self.assertTrue(valid_bottom_alone)
+
+    def test_incomplete_wardrobe_top_alone_and_top_jacket_selection(self, *args):
+        top = self._create_item(self.male_user, self.cat_tops, description="Blue Oxford shirt")
+        today_date = timezone.now().date()
+
+        # Single top in wardrobe -> Generates Top alone without error
+        _, selected_items = select_auto_tryon_assets(self.male_user, today_date)
+        self.assertEqual(selected_items, [top])
+
+        # Top + Outerwear in wardrobe (no pants/shoes) -> Generates Top + Outerwear
+        jacket = self._create_item(self.male_user, self.cat_outerwear, description="Light blue blazer")
+        _, selected_items_2 = select_auto_tryon_assets(self.male_user, today_date)
+        self.assertIn(top, selected_items_2)
+        self.assertIn(jacket, selected_items_2)
+
+    def test_incomplete_wardrobe_dress_alone_selection(self, *args):
+        dress = self._create_item(self.female_user, self.cat_dresses, description="Floral summer dress")
+        today_date = timezone.now().date()
+
+        # Single dress in wardrobe -> Generates Dress alone without requiring shoes/accessories
+        _, selected_items = select_auto_tryon_assets(self.female_user, today_date)
+        self.assertEqual(selected_items, [dress])
+
+    def test_ambiguous_traditional_garment_allowed(self, *args):
+        ambiguous_kaftan = self._create_item(
+            self.male_user,
+            self.cat_kaftan,
+            description="Traditional white kaftan garment.",
+            color="white"
+        )
+        constraints = get_profile_constraints(self.male_user)
+        eligible = filter_eligible_wardrobe_items([ambiguous_kaftan], constraints)
+        self.assertIn(ambiguous_kaftan, eligible)
+
+        is_sem_valid, _ = validate_outfit_semantic_suitability([ambiguous_kaftan], constraints)
+        self.assertTrue(is_sem_valid)
+
+
+    def test_male_user_feminine_kaftan_dress_rejected_semantically(self, *args):
+        kaftan_dress = self._create_item(
+            self.male_user,
+            self.cat_kaftan,
+            description="A long, flowing beige Kaftan dress with short sleeves and a draped bodice featuring a decorative brooch at the waist.",
+            color="beige"
+        )
+        constraints = get_profile_constraints(self.male_user)
+        eligible = filter_eligible_wardrobe_items([kaftan_dress], constraints)
+        self.assertNotIn(kaftan_dress, eligible)
+
+        is_sem_valid, _ = validate_outfit_semantic_suitability([kaftan_dress], constraints)
+        self.assertFalse(is_sem_valid)
+
+    def test_male_user_men_traditional_thobe_allowed(self, *args):
+        men_thobe = self._create_item(
+            self.male_user,
+            self.cat_kaftan,
+            description="A classic white men's thobe / kaftan with mandarin collar.",
+            color="white"
+        )
+        constraints = get_profile_constraints(self.male_user)
+        eligible = filter_eligible_wardrobe_items([men_thobe], constraints)
+        self.assertIn(men_thobe, eligible)
+
+        is_sem_valid, _ = validate_outfit_semantic_suitability([men_thobe], constraints)
+        self.assertTrue(is_sem_valid)
+
+    def test_exact_outfit_job_198_scenario_rejection(self, *args):
+        # Recreating exact scenario of OutfitJob 198 (feminine kaftan dress 78 + heavy trench coat 72 + white sneakers 21 for male in Bangladesh summer)
+        kaftan_dress_78 = self._create_item(
+            self.male_user,
+            self.cat_kaftan,
+            description="A long, flowing beige Kaftan dress with short sleeves and a draped bodice featuring a decorative brooch at the waist.",
+            color="beige"
+        )
+        trench_coat_72 = self._create_item(
+            self.male_user,
+            self.cat_outerwear,
+            description="A classic beige trench coat with double-breasted buttons, epaulets, and a waist belt, worn over a suit.",
+            color="beige"
+        )
+        sneakers_21 = self._create_item(
+            self.male_user,
+            self.cat_shoes,
+            description="A white low-top sneaker featuring a classic design.",
+            color="white"
+        )
+
+        constraints = get_profile_constraints(self.male_user)
+        today_date = timezone.now().date()
+
+        is_sem_valid, _ = validate_outfit_semantic_suitability([kaftan_dress_78, trench_coat_72, sneakers_21], constraints, today_date)
+        self.assertFalse(is_sem_valid)
+
+    def test_fallback_selection_does_not_blindly_pick_all_categories(self, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+        dress = self._create_item(self.male_user, self.cat_dresses)
+        shoes = self._create_item(self.male_user, self.cat_shoes)
+
+        today_date = timezone.now().date()
+        _, selected_items = select_auto_tryon_assets(self.male_user, today_date)
+
+        self.assertNotIn(dress, selected_items)
+        self.assertIn(top, selected_items)
+        self.assertIn(bottom, selected_items)
+
+    def test_female_user_can_select_dress_outfit(self, *args):
+        dress = self._create_item(self.female_user, self.cat_dresses)
+        shoes = self._create_item(self.female_user, self.cat_shoes)
+
+        today_date = timezone.now().date()
+        _, selected_items = select_auto_tryon_assets(self.female_user, today_date)
+
+        self.assertIn(dress, selected_items)
+        self.assertIn(shoes, selected_items)
+
+    def test_fullbody_garment_plus_outerwear_valid_composition(self, *args):
+        outerwear_cat, _ = Category.objects.get_or_create(name="Outerwear")
+        dress = self._create_item(self.female_user, self.cat_dresses)
+        jacket = self._create_item(self.female_user, outerwear_cat, description="Light stylish denim jacket")
+        bottom = self._create_item(self.female_user, self.cat_bottoms)
+
+        # Full-body + Outerwear -> Valid
+        valid_fb_outer, _ = validate_outfit_composition([dress, jacket])
+        self.assertTrue(valid_fb_outer)
+
+        # Full-body + Bottom -> Invalid
+        invalid_fb_bottom, _ = validate_outfit_composition([dress, bottom])
+        self.assertFalse(invalid_fb_bottom)
+
+    @patch("outfits.services.OpenAI")
+    def test_openai_invalid_category_combination_rejected_by_backend(self, mock_openai, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+        dress = self._create_item(self.male_user, self.cat_dresses)
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.return_value.choices = [
+            MagicMock(message=MagicMock(content=json.dumps({
+                "selected_item_ids": [top.id, bottom.id, dress.id],
+                "reasoning": {"title": "Test Look", "subtitle": "Test"}
+            })))
+        ]
+
+        today_date = timezone.now().date()
+        with patch.object(settings, "OPENAI_API_KEY", "dummy_key"):
+            _, selected_items, _ = select_auto_outfit_combination(self.male_user, today_date)
+
+        self.assertNotIn(dress, selected_items)
+        self.assertIn(top, selected_items)
+        self.assertIn(bottom, selected_items)
+
+    @patch("outfits.services.OpenAI")
+    def test_openai_failure_uses_valid_fallback(self, mock_openai, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.side_effect = Exception("OpenAI service unavailable")
+
+        today_date = timezone.now().date()
+        with patch.object(settings, "OPENAI_API_KEY", "dummy_key"):
+            _, selected_items, reasoning = select_auto_outfit_combination(self.male_user, today_date)
+
+        self.assertIn(top, selected_items)
+        self.assertIn(bottom, selected_items)
+        self.assertIn("Daily Outfit Recommendation", reasoning["title"])
+
+    def test_no_valid_composition_returns_failed_job_response(self, *args):
+        # Male user only has a dress (0 eligible items)
+        dress = self._create_item(self.male_user, self.cat_dresses)
+
+        job = get_or_create_today_auto_job(self.male_user)
+        self.assertEqual(job.status, JobStatus.FAILED)
+        self.assertIn("No completed wardrobe items", job.error_message)
+
+    @patch("outfits.services.submit_try_on_job")
+    def test_today_outfit_api_endpoint_lazy_generation(self, mock_submit, *args):
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+        avatar = resolve_tryon_avatar(self.male_user)
+
+        self.client.force_authenticate(user=self.male_user)
+        response = self.client.get("/api/v1/outfits/today/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "success")
+        self.assertIn("id", response.data["data"])
+
+    @patch("outfits.services.submit_try_on_job")
+    def test_failed_today_auto_job_is_retried_on_get_today(self, mock_submit, *args):
+        today_date = timezone.now().date()
+        avatar = resolve_tryon_avatar(self.male_user)
+        
+        # 1. Create a stale failed job for today
+        stale_failed_job = OutfitJob.objects.create(
+            user=self.male_user,
+            avatar=avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.FAILED,
+            error_message="Stale failure from earlier"
+        )
+        
+        # 2. Add valid completed wardrobe items to user's wardrobe
+        top = self._create_item(self.male_user, self.cat_tops)
+        bottom = self._create_item(self.male_user, self.cat_bottoms)
+
+        # 3. GET /today/ should retry generation and create a new active job
+        new_job = get_or_create_today_auto_job(self.male_user)
+        self.assertNotEqual(new_job.id, stale_failed_job.id)
+        self.assertNotEqual(new_job.status, JobStatus.FAILED)
+        self.assertIn(top, new_job.wardrobe_items.all())
+        self.assertFalse(OutfitJob.objects.filter(id=stale_failed_job.id).exists())
+
+    @patch("outfits.services.submit_try_on_job")
+    def test_done_today_auto_job_is_cached(self, mock_submit, *args):
+        today_date = timezone.now().date()
+        avatar = resolve_tryon_avatar(self.male_user)
+        
+        # 1. Create a DONE job for today
+        done_job = OutfitJob.objects.create(
+            user=self.male_user,
+            avatar=avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            result_image="https://res.cloudinary.com/demo/image.jpg"
+        )
+        
+        # 2. GET /today/ returns the cached DONE job without creating a new one
+        retrieved_job = get_or_create_today_auto_job(self.male_user)
+        self.assertEqual(retrieved_job.id, done_job.id)
+        self.assertEqual(retrieved_job.status, JobStatus.DONE)
+
