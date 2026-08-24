@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, date as date_type, timedelta
 import io
 from unittest.mock import MagicMock, patch
 from PIL import Image
@@ -403,10 +403,11 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
         )
         OutfitJob.objects.filter(pk=today_job.pk).update(created_at=now)
 
-        # Job 3: Old job created 35 days ago (older than 30 days)
+        # Job 3: Old job created 35 days ago (older than current month)
         old_job = OutfitJob.objects.create(
             user=self.user,
             avatar=self.avatar,
+            scheduled_date=(now - timedelta(days=35)).date(),
             trigger_type=TriggerType.MANUAL,
             status=JobStatus.DONE,
         )
@@ -429,6 +430,69 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
         self.assertEqual(retrieved_ids, [today_job.id, recent_job.id])
         self.assertNotIn(old_job.id, retrieved_ids)
         self.assertNotIn(other_user_job.id, retrieved_ids)
+
+    def test_month_and_year_parameter_filtering_and_leap_year_support(self):
+        self.client.force_authenticate(user=self.user)
+
+        # Job in July 2026 (July 15, 2026)
+        july_2026_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_type(2026, 7, 15),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+
+        # Job in August 2026 (August 10, 2026)
+        august_2026_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_type(2026, 8, 10),
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+        )
+
+        # Job in Feb 2024 (Leap year - Feb 29, 2024)
+        feb_leap_2024_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_type(2024, 2, 29),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+
+        # Job in Feb 2026 (Non-leap year - Feb 28, 2026)
+        feb_2026_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_type(2026, 2, 28),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+        )
+
+        # 1. Query July 2026 (month=7&year=2026)
+        res_july = self.client.get("/api/v1/outfits/1-months/?month=7&year=2026")
+        self.assertEqual(res_july.status_code, status.HTTP_200_OK)
+        july_ids = [item["id"] for item in res_july.data]
+        self.assertEqual(july_ids, [july_2026_job.id])
+
+        # 2. Query August 2026 (month=8&year=2026)
+        res_august = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res_august.status_code, status.HTTP_200_OK)
+        august_ids = [item["id"] for item in res_august.data]
+        self.assertEqual(august_ids, [august_2026_job.id])
+
+        # 3. Query Feb 2024 leap year (month=2&year=2024)
+        res_feb_2024 = self.client.get("/api/v1/outfits/1-months/?month=2&year=2024")
+        self.assertEqual(res_feb_2024.status_code, status.HTTP_200_OK)
+        feb_2024_ids = [item["id"] for item in res_feb_2024.data]
+        self.assertEqual(feb_2024_ids, [feb_leap_2024_job.id])
+
+        # 4. Query Feb 2026 non-leap year (month=2&year=2026)
+        res_feb_2026 = self.client.get("/api/v1/outfits/1-months/?month=2&year=2026")
+        self.assertEqual(res_feb_2026.status_code, status.HTTP_200_OK)
+        feb_2026_ids = [item["id"] for item in res_feb_2026.data]
+        self.assertEqual(feb_2026_ids, [feb_2026_job.id])
 
 
 import json

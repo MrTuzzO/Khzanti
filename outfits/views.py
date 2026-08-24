@@ -4,7 +4,8 @@ import logging
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.db.models import Avg, Count
+import calendar
+from django.db.models import Avg, Count, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -358,6 +359,68 @@ class TryOnSaveView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+def _parse_month_date_range(query_params):
+    """
+    Calculates start_date and end_date for filtering based on user-supplied query parameters:
+    - start_date / end_date (e.g. 2026-08-01, 2026-08-31)
+    - date (e.g. 2026-08 or 2026-08-15)
+    - month & year (e.g. month=8&year=2026)
+    Defaults to current month if no parameters supplied.
+    Handles varying month lengths and leap years.
+    """
+    today = timezone.now().date()
+    year = None
+    month = None
+
+    start_date_param = query_params.get("start_date")
+    end_date_param = query_params.get("end_date")
+    if start_date_param and end_date_param:
+        try:
+            s_date = date_type.fromisoformat(start_date_param)
+            e_date = date_type.fromisoformat(end_date_param)
+            return s_date, e_date
+        except ValueError:
+            pass
+
+    date_param = query_params.get("date")
+    if date_param:
+        parts = date_param.strip().split("-")
+        if len(parts) >= 2:
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+            except ValueError:
+                pass
+
+    month_param = query_params.get("month")
+    year_param = query_params.get("year")
+
+    if month_param and month is None:
+        try:
+            month = int(month_param)
+        except ValueError:
+            pass
+
+    if year_param and year is None:
+        try:
+            year = int(year_param)
+        except ValueError:
+            pass
+
+    if year is None:
+        year = today.year
+    if month is None:
+        month = today.month
+
+    if month < 1 or month > 12:
+        month = today.month
+
+    _, last_day = calendar.monthrange(year, month)
+    start_date = date_type(year, month, 1)
+    end_date = date_type(year, month, last_day)
+    return start_date, end_date
+
+
 class SavedOutfitListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
@@ -375,18 +438,13 @@ class SavedOutfitListCreateView(generics.ListCreateAPIView):
 
         start_date = self.request.query_params.get("start_date")
         end_date = self.request.query_params.get("end_date")
+        month = self.request.query_params.get("month")
+        year = self.request.query_params.get("year")
+        date_param = self.request.query_params.get("date")
 
-        if start_date:
-            try:
-                qs = qs.filter(date__gte=date_type.fromisoformat(start_date))
-            except ValueError:
-                pass
-
-        if end_date:
-            try:
-                qs = qs.filter(date__lte=date_type.fromisoformat(end_date))
-            except ValueError:
-                pass
+        if start_date or end_date or month or year or date_param:
+            s_date, e_date = _parse_month_date_range(self.request.query_params)
+            qs = qs.filter(date__range=(s_date, e_date))
 
         return qs
 
@@ -537,21 +595,22 @@ class SavedOutfitRatingsListView(generics.ListAPIView):
 class OneMonthOutfitHistoryView(generics.ListAPIView):
     """
     GET /api/v1/outfits/1-months/
-    Returns the authenticated user's outfit jobs created in the last 30 days.
+    Returns the authenticated user's outfit jobs for the requested month and year (or date/start_date/end_date).
+    Defaults to the current month if no parameters are supplied.
     """
 
     permission_classes = [IsAuthenticated]
     serializer_class = OutfitJobSerializer
 
     def get_queryset(self):
-        thirty_days_ago = timezone.now() - timedelta(days=30)
+        start_date, end_date = _parse_month_date_range(self.request.query_params)
         return (
             OutfitJob.objects.filter(
                 user=self.request.user,
-                created_at__gte=thirty_days_ago,
+                scheduled_date__range=(start_date, end_date),
             )
             .select_related("avatar")
             .prefetch_related("wardrobe_items")
-            .order_by("-created_at")
+            .order_by("-scheduled_date", "-created_at")
         )
 
