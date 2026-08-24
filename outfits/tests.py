@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 import io
 from unittest.mock import MagicMock, patch
 from PIL import Image
@@ -796,4 +796,399 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
         retrieved_job = get_or_create_today_auto_job(self.male_user)
         self.assertEqual(retrieved_job.id, done_job.id)
         self.assertEqual(retrieved_job.status, JobStatus.DONE)
+
+
+from outfits.models import SavedOutfit
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class SavedOutfitWorkflowAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="saveduser@example.com",
+            name="Saved Outfit User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="othersaveduser@example.com",
+            name="Other Saved User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.avatar = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/avatar.png",
+            is_saved=True,
+        )
+
+        self.category, _ = Category.objects.get_or_create(name="Tops")
+        self.dummy_image = SimpleUploadedFile(
+            name="top.png",
+            content=VALID_PNG_BYTES,
+            content_type="image/png",
+        )
+        self.wardrobe_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image=self.dummy_image,
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=self.wardrobe_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/top_bg.png",
+            is_saved=False,
+        )
+
+    def _mock_requests_get(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
+
+    @patch("requests.get")
+    def test_a_empty_saved_history(self, mock_get, mock_cloud):
+        response = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+
+    @patch("requests.get")
+    def test_b_one_saved_automatic_outfit(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        today_date = timezone.now().date()
+        auto_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/auto_tryon_result.png",
+            is_saved=False,
+        )
+        auto_job.wardrobe_items.add(self.wardrobe_item)
+
+        save_resp = self.client.post(f"/api/v1/outfits/try-on/{auto_job.id}/save/")
+        self.assertEqual(save_resp.status_code, status.HTTP_200_OK)
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 1)
+        self.assertEqual(saved_list[0]["outfit_job"]["id"], auto_job.id)
+        self.assertEqual(saved_list[0]["outfit_job"]["trigger_type"], TriggerType.AUTO)
+
+    @patch("requests.get")
+    def test_c_one_saved_manual_outfit(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        today_date = timezone.now().date()
+        manual_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/manual_tryon_result.png",
+            is_saved=False,
+        )
+        manual_job.wardrobe_items.add(self.wardrobe_item)
+
+        save_resp = self.client.post(f"/api/v1/outfits/try-on/{manual_job.id}/save/")
+        self.assertEqual(save_resp.status_code, status.HTTP_200_OK)
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 1)
+        self.assertEqual(saved_list[0]["outfit_job"]["id"], manual_job.id)
+        self.assertEqual(saved_list[0]["outfit_job"]["trigger_type"], TriggerType.MANUAL)
+
+    @patch("requests.get")
+    def test_d_multiple_saved_outfits_and_same_day_manual_outfits(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        today_date = timezone.now().date()
+
+        manual_1 = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/manual1.png",
+        )
+        manual_2 = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/manual2.png",
+        )
+
+        self.client.post(f"/api/v1/outfits/try-on/{manual_1.id}/save/")
+        self.client.post(f"/api/v1/outfits/try-on/{manual_2.id}/save/")
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 2)
+        returned_job_ids = [item["outfit_job"]["id"] for item in saved_list]
+        self.assertIn(manual_1.id, returned_job_ids)
+        self.assertIn(manual_2.id, returned_job_ids)
+
+    @patch("requests.get")
+    def test_e_mixed_auto_and_manual_saved_outfits(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        date_1 = timezone.now().date() - timedelta(days=1)
+        date_2 = timezone.now().date() - timedelta(days=3)
+
+        auto_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_1,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/auto.png",
+        )
+        manual_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_2,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/manual.png",
+        )
+
+        self.client.post(f"/api/v1/outfits/try-on/{auto_job.id}/save/")
+        self.client.post(f"/api/v1/outfits/try-on/{manual_job.id}/save/")
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 2)
+        trigger_types = [item["outfit_job"]["trigger_type"] for item in saved_list]
+        self.assertIn(TriggerType.AUTO, trigger_types)
+        self.assertIn(TriggerType.MANUAL, trigger_types)
+
+    @patch("requests.get")
+    def test_f_user_isolation(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        date_now = timezone.now().date()
+
+        user_a_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_now,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/usera.png",
+        )
+        user_b_job = OutfitJob.objects.create(
+            user=self.other_user,
+            avatar=self.avatar,
+            scheduled_date=date_now - timedelta(days=1),
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/userb.png",
+        )
+
+        SavedOutfit.objects.create(user=self.user, outfit_job=user_a_job, date=date_now)
+        SavedOutfit.objects.create(user=self.other_user, outfit_job=user_b_job, date=date_now - timedelta(days=1))
+
+        # User A request
+        get_resp_a = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp_a.status_code, status.HTTP_200_OK)
+        saved_list_a = get_resp_a.data
+        self.assertEqual(len(saved_list_a), 1)
+        self.assertEqual(saved_list_a[0]["outfit_job"]["id"], user_a_job.id)
+
+        # User B request
+        self.client.force_authenticate(user=self.other_user)
+        get_resp_b = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp_b.status_code, status.HTTP_200_OK)
+        saved_list_b = get_resp_b.data
+        self.assertEqual(len(saved_list_b), 1)
+        self.assertEqual(saved_list_b[0]["outfit_job"]["id"], user_b_job.id)
+
+    @patch("requests.get")
+    def test_g_no_30_day_date_restriction(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        old_date = timezone.now().date() - timedelta(days=45)
+
+        old_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=old_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/old.png",
+        )
+        SavedOutfit.objects.create(user=self.user, outfit_job=old_job, date=old_date)
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 1)
+        self.assertEqual(saved_list[0]["outfit_job"]["id"], old_job.id)
+
+    @patch("requests.get")
+    def test_h_unsaved_outfit_job_excluded(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        date_now = timezone.now().date()
+
+        unsaved_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_now,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/unsaved.png",
+            is_saved=False,
+        )
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 0)
+
+    @patch("requests.get")
+    def test_i_post_saved_endpoint_creates_record_and_get_returns_it(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=timezone.now().date(),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/post_save.png",
+            is_saved=False,
+        )
+
+        post_resp = self.client.post("/api/v1/outfits/saved/", {
+            "outfit_job_id": job.id,
+            "saved_date": "2026-08-24",
+            "note": "Great outfit",
+        })
+        self.assertEqual(post_resp.status_code, status.HTTP_201_CREATED)
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 1)
+        self.assertEqual(saved_list[0]["outfit_job"]["id"], job.id)
+        self.assertEqual(saved_list[0]["note"], "Great outfit")
+
+    @patch("requests.get")
+    def test_j_both_auto_and_manual_save_flows(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        date_1 = timezone.now().date() - timedelta(days=1)
+        date_2 = timezone.now().date() - timedelta(days=2)
+
+        auto_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_1,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/auto_flow.png",
+        )
+        manual_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date_2,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/manual_flow.png",
+        )
+
+        # Save auto job via try-on save endpoint
+        save_auto_resp = self.client.post(f"/api/v1/outfits/try-on/{auto_job.id}/save/")
+        self.assertEqual(save_auto_resp.status_code, status.HTTP_200_OK)
+
+        # Save manual job via POST /saved/ endpoint
+        save_manual_resp = self.client.post("/api/v1/outfits/saved/", {
+            "outfit_job_id": manual_job.id,
+            "saved_date": str(date_2),
+        })
+        self.assertEqual(save_manual_resp.status_code, status.HTTP_201_CREATED)
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 2)
+
+    @patch("requests.get")
+    def test_k_same_outfit_job_saved_twice_idempotent(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        today_date = timezone.now().date()
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/same_job.png",
+        )
+
+        # First save
+        self.client.post(f"/api/v1/outfits/try-on/{job.id}/save/")
+        # Second save attempt for the exact same job
+        self.client.post(f"/api/v1/outfits/try-on/{job.id}/save/")
+
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 1)
+        self.assertEqual(saved_list[0]["outfit_job"]["id"], job.id)
+
+    @patch("requests.get")
+    def test_l_critical_regression_auto_and_manual_same_date_both_returned(self, mock_get, mock_cloud):
+        self._mock_requests_get(mock_get)
+        target_date = date.fromisoformat("2026-08-24")
+
+        # OutfitJob #212 (e.g. manual try-on)
+        job_212 = OutfitJob.objects.create(
+            id=212,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=target_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/job212.png",
+            is_saved=False,
+        )
+        # OutfitJob #214 (e.g. daily auto outfit)
+        job_214 = OutfitJob.objects.create(
+            id=214,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=target_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/job214.png",
+            is_saved=False,
+        )
+
+        # Save #212
+        save_212 = self.client.post(f"/api/v1/outfits/try-on/{job_212.id}/save/")
+        self.assertEqual(save_212.status_code, status.HTTP_200_OK)
+
+        # Save #214
+        save_214 = self.client.post(f"/api/v1/outfits/try-on/{job_214.id}/save/")
+        self.assertEqual(save_214.status_code, status.HTTP_200_OK)
+
+        # Verify GET /saved/ returns BOTH #212 and #214
+        get_resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        saved_list = get_resp.data
+        self.assertEqual(len(saved_list), 2)
+        returned_job_ids = [item["outfit_job"]["id"] for item in saved_list]
+        self.assertIn(212, returned_job_ids)
+        self.assertIn(214, returned_job_ids)
+
+        # Invariant check: OutfitJob.is_saved=True <-> SavedOutfit exists
+        for jid in (212, 214):
+            job_db = OutfitJob.objects.get(pk=jid)
+            self.assertTrue(job_db.is_saved)
+            self.assertTrue(SavedOutfit.objects.filter(user=self.user, outfit_job=job_db).exists())
 
