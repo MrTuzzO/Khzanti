@@ -223,19 +223,15 @@ class SavedOutfitCreateSerializer(serializers.ModelSerializer):
 
         job = validated_data.pop("outfit_job")
         saved_date = validated_data.pop("date")
-
-        save_try_on_to_cloudinary(job)
-
         user = validated_data.pop("user", None) or self.context["request"].user
 
-        saved_outfit, _ = SavedOutfit.objects.update_or_create(
-            user=user,
-            date=saved_date,
-            defaults={
-                "outfit_job": job,
-                **validated_data,
-            },
-        )
+        save_try_on_to_cloudinary(job, saved_date=saved_date)
+
+        saved_outfit = SavedOutfit.objects.get(user=user, outfit_job=job)
+        for key, val in validated_data.items():
+            setattr(saved_outfit, key, val)
+        saved_outfit.date = saved_date
+        saved_outfit.save()
         return saved_outfit
 
 
