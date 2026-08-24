@@ -240,3 +240,107 @@ class WardrobeItemOnDemandCloudinaryTests(APITestCase):
         res_detail = self.client.get(f"/api/v1/wardrobe-items-ai/items/{item.id}/")
         self.assertEqual(res_detail.status_code, status.HTTP_200_OK)
         self.assertEqual(res_detail.data["analysis"]["fal_cdn_url"], "https://v3b.fal.media/files/b/processed.png")
+
+    # Test 9: Deleting a wardrobe item triggers automatic Cloudinary image cleanup
+    @patch("cloudinary.uploader.destroy")
+    def test_9_deleting_wardrobe_item_cleans_up_cloudinary_storage(self, mock_cloud_destroy, mock_cloud_upload):
+        item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image="wardrobe_items/originals/test_delete.png",
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.DONE,
+            processed_image="wardrobe_items_ai/processed/test_delete_proc.png",
+            is_saved=True,
+        )
+
+        response = self.client.delete(f"/api/v1/wardrobe-items-ai/items/{item.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(WardrobeItem.objects.filter(pk=item.id).exists())
+        self.assertGreaterEqual(mock_cloud_destroy.call_count, 1)
+
+    # Test 10: Status polling endpoint performs ZERO Cloudinary uploads
+    def test_10_status_polling_performs_zero_cloudinary_uploads(self, mock_cloud_upload):
+        item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image="wardrobe_items/originals/test_status.png",
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.PROCESSING,
+            fal_cdn_url="https://v3b.fal.media/files/b/status_test.png",
+            is_saved=False,
+        )
+
+        mock_cloud_upload.reset_mock()
+        res1 = self.client.get(f"/api/v1/wardrobe-items-ai/{item.id}/status/")
+        res2 = self.client.get(f"/api/v1/wardrobe-items-ai/{item.id}/status/")
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        mock_cloud_upload.assert_not_called()
+
+    # Test 11: Background removal completed but vision still processing -> status remains processing, processed_image is null
+    def test_11_bg_removal_complete_vision_processing_lifecycle(self, mock_cloud_upload):
+        item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image="wardrobe_items/originals/test_lifecycle.png",
+        )
+        analysis = ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.PROCESSING,
+            fal_cdn_url="https://v3b.fal.media/files/b/bg_only.png",
+            is_saved=False,
+            color="",
+            description="",
+        )
+
+        res = self.client.get(f"/api/v1/wardrobe-items-ai/{item.id}/status/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["status"], "processing")
+        self.assertEqual(res.data["fal_cdn_url"], "https://v3b.fal.media/files/b/bg_only.png")
+        self.assertEqual(res.data["display_url"], "https://v3b.fal.media/files/b/bg_only.png")
+        self.assertIsNone(res.data["processed_image"])
+        self.assertFalse(res.data["is_saved"])
+        self.assertEqual(res.data["color"], "")
+        self.assertEqual(res.data["description"], "")
+
+    # Test 12: Vision webhook completes -> status becomes DONE, color/description saved, processed_image remains null until explicit save
+    def test_12_vision_webhook_completes_status_done_processed_image_null(self, mock_cloud_upload):
+        item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image="wardrobe_items/originals/test_vision_done.png",
+        )
+        analysis = ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            fal_request_id_vision="req_vis_done_99",
+            fal_cdn_url="https://v3b.fal.media/files/b/bg_result.png",
+            status=ItemAnalysis.JobStatus.PROCESSING,
+            is_saved=False,
+        )
+
+        payload = {
+            "request_id": "req_vis_done_99",
+            "status": "OK",
+            "payload": {
+                "output": '{"matches_category": true, "detected_item_type": "top", "color": "emerald green", "description": "Emerald green blouse"}'
+            },
+        }
+
+        webhook_res = self.client.post("/api/v1/wardrobe-items-ai/webhook/vision/", data=payload, format="json")
+        self.assertEqual(webhook_res.status_code, status.HTTP_200_OK)
+
+        status_res = self.client.get(f"/api/v1/wardrobe-items-ai/{item.id}/status/")
+        self.assertEqual(status_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_res.data["status"], "done")
+        self.assertEqual(status_res.data["color"], "emerald green")
+        self.assertEqual(status_res.data["description"], "Emerald green blouse")
+        self.assertIsNone(status_res.data["processed_image"])
+        self.assertFalse(status_res.data["is_saved"])
+        self.assertEqual(status_res.data["display_url"], "https://v3b.fal.media/files/b/bg_result.png")
+
+
