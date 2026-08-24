@@ -58,7 +58,7 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
                 return obj.processed_image.url
             except Exception:
                 pass
-        return obj.fal_cdn_url or None
+        return None
 
 
 
