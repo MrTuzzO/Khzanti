@@ -5,11 +5,12 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
 import calendar
+from django.db import transaction
 from django.db.models import Avg, Count, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from drf_spectacular.utils import OpenApiTypes, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 import requests
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
@@ -23,8 +24,10 @@ from accounts.models import User
 from core.exceptions import ServiceError
 from core.pagination import StandardPagination
 from wardrobe_items_ai.services import _friendly_error_message, verify_webhook_signature
-from .models import JobStatus, OutfitJob, OutfitRating, SavedOutfit, TriggerType
+from .models import DailyOutfitSelection, JobStatus, OutfitJob, OutfitRating, SavedOutfit, TriggerType
 from .serializers import (
+    DailyOutfitSelectionCreateSerializer,
+    DailyOutfitSelectionSerializer,
     OutfitJobSerializer,
     OutfitJobStatusSerializer,
     OutfitRatingSerializer,
@@ -613,4 +616,111 @@ class OneMonthOutfitHistoryView(generics.ListAPIView):
             .prefetch_related("wardrobe_items")
             .order_by("-scheduled_date", "-created_at")
         )
+
+
+class DailyOutfitSelectionView(APIView):
+    """
+    POST /api/v1/outfits/daily-selection/
+    Select or replace an outfit for a specific date.
+
+    GET /api/v1/outfits/daily-selection/?date=YYYY-MM-DD
+    Get the selected outfit for a specific date.
+
+    DELETE /api/v1/outfits/daily-selection/?date=YYYY-MM-DD
+    Delete the selected outfit for a specific date.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=DailyOutfitSelectionCreateSerializer,
+        responses={200: DailyOutfitSelectionSerializer, 201: DailyOutfitSelectionSerializer},
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = DailyOutfitSelectionCreateSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        selected_date = serializer.validated_data["date"]
+        job = serializer.validated_data["outfit_job"]
+
+        with transaction.atomic():
+            selection, created = DailyOutfitSelection.objects.update_or_create(
+                user=request.user,
+                date=selected_date,
+                defaults={"outfit_job": job},
+            )
+
+        read_serializer = DailyOutfitSelectionSerializer(selection, context={"request": request})
+        res_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(read_serializer.data, status=res_status)
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="date",
+                description="Calendar date in YYYY-MM-DD format",
+                required=True,
+                type=OpenApiTypes.DATE,
+            )
+        ],
+        responses={200: DailyOutfitSelectionSerializer},
+    )
+    def get(self, request, *args, **kwargs):
+        date_param = request.query_params.get("date")
+        if not date_param:
+            raise ValidationError({"date": ["date query parameter is required."]})
+
+        try:
+            target_date = date_type.fromisoformat(date_param.strip())
+        except (ValueError, TypeError):
+            raise ValidationError({"date": ["Invalid date format. Use YYYY-MM-DD."]})
+
+        try:
+            selection = DailyOutfitSelection.objects.select_related("outfit_job").get(
+                user=request.user,
+                date=target_date,
+            )
+        except DailyOutfitSelection.DoesNotExist:
+            raise Http404("Daily outfit selection for this date not found.")
+
+        serializer = DailyOutfitSelectionSerializer(selection, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="date",
+                description="Calendar date in YYYY-MM-DD format",
+                required=True,
+                type=OpenApiTypes.DATE,
+            )
+        ],
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, *args, **kwargs):
+        date_param = request.query_params.get("date")
+        if not date_param:
+            raise ValidationError({"date": ["date query parameter is required."]})
+
+        try:
+            target_date = date_type.fromisoformat(date_param.strip())
+        except (ValueError, TypeError):
+            raise ValidationError({"date": ["Invalid date format. Use YYYY-MM-DD."]})
+
+        try:
+            selection = DailyOutfitSelection.objects.get(
+                user=request.user,
+                date=target_date,
+            )
+        except DailyOutfitSelection.DoesNotExist:
+            raise Http404("Daily outfit selection for this date not found.")
+
+        selection.delete()
+        return Response(
+            {"detail": "Daily outfit selection deleted successfully."},
+            status=status.HTTP_200_OK,
+        )
+
 
