@@ -3,7 +3,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from avatars.models import Avatar
 from wardrobe_items_ai.models import ItemAnalysis, JobStatus as ItemJobStatus, WardrobeItem
-from .models import JobStatus, OutfitJob, OutfitRating, SavedOutfit
+from .models import DailyOutfitSelection, JobStatus, OutfitJob, OutfitRating, SavedOutfit
 
 User = get_user_model()
 
@@ -372,4 +372,57 @@ class SavedOutfitRatingDetailSerializer(serializers.ModelSerializer):
         model = OutfitRating
         fields = ["id", "rater", *RATING_CATEGORIES, "created_at"]
         read_only_fields = fields
+
+
+class DailyOutfitSelectionCreateSerializer(serializers.Serializer):
+    date = serializers.DateField(help_text="Date for which the outfit is selected (YYYY-MM-DD).")
+    outfit_id = serializers.IntegerField(help_text="ID of a completed OutfitJob belonging to the user.")
+
+    def validate_outfit_id(self, value):
+        user = self.context["request"].user
+        try:
+            job = OutfitJob.objects.get(pk=value)
+        except OutfitJob.DoesNotExist:
+            raise serializers.ValidationError(f"OutfitJob with ID {value} does not exist.")
+
+        if job.user != user:
+            raise serializers.ValidationError("OutfitJob does not belong to the authenticated user.")
+
+        if job.status != JobStatus.DONE:
+            raise serializers.ValidationError(
+                f"OutfitJob must be completed before it can be selected as a daily outfit. Current status: {job.status}."
+            )
+
+        return job
+
+    def validate(self, attrs):
+        attrs["outfit_job"] = attrs.pop("outfit_id")
+        return attrs
+
+
+class DailyOutfitSelectionSerializer(serializers.ModelSerializer):
+    outfit_id = serializers.IntegerField(source="outfit_job.id", read_only=True)
+    result_image = serializers.SerializerMethodField()
+    trigger_type = serializers.CharField(source="outfit_job.trigger_type", read_only=True)
+    status = serializers.CharField(source="outfit_job.status", read_only=True)
+
+    class Meta:
+        model = DailyOutfitSelection
+        fields = [
+            "id",
+            "date",
+            "outfit_id",
+            "result_image",
+            "trigger_type",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_result_image(self, obj):
+        url = obj.outfit_job.display_result_image if obj.outfit_job else None
+        return url if url else None
+
 
