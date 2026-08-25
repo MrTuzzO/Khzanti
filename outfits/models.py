@@ -162,3 +162,34 @@ class OutfitRating(models.Model):
     def __str__(self):
         return f"Rating {self.id} by {self.rater_id} on SavedOutfit {self.saved_outfit_id}"
 
+
+class DailyOutfitSelection(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="daily_outfit_selections",
+    )
+    date = models.DateField(db_index=True)
+    outfit_job = models.ForeignKey(
+        OutfitJob,
+        on_delete=models.CASCADE,
+        related_name="daily_selections",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date"]
+        verbose_name = "Daily Outfit Selection"
+        verbose_name_plural = "Daily Outfit Selections"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "date"],
+                name="unique_daily_outfit_selection_per_user_per_date",
+            )
+        ]
+
+    def __str__(self):
+        return f"DailyOutfitSelection {self.id} - {self.user} on {self.date} -> OutfitJob {self.outfit_job_id}"
+
+
