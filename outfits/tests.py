@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 
 from avatars.models import Avatar
-from outfits.models import JobStatus, OutfitJob, TriggerType
+from outfits.models import DailyOutfitSelection, JobStatus, OutfitJob, SavedOutfit, TriggerType
 from wardrobe.models import Category
 from wardrobe_items_ai.models import ItemAnalysis, WardrobeItem
 
@@ -1255,4 +1255,254 @@ class SavedOutfitWorkflowAPITestCase(APITestCase):
             job_db = OutfitJob.objects.get(pk=jid)
             self.assertTrue(job_db.is_saved)
             self.assertTrue(SavedOutfit.objects.filter(user=self.user, outfit_job=job_db).exists())
+
+
+class DailyOutfitSelectionAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="dailyuser@example.com",
+            name="Daily User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="otherdaily@example.com",
+            name="Other Daily User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.avatar = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+
+        self.outfit_job_1 = OutfitJob.objects.create(
+            id=221,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/outfit221.png",
+            is_saved=False,
+        )
+
+        self.outfit_job_2 = OutfitJob.objects.create(
+            id=219,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/outfit219.png",
+            is_saved=False,
+        )
+
+        self.other_user_avatar = Avatar.objects.create(
+            user=self.other_user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+        self.other_user_job = OutfitJob.objects.create(
+            id=300,
+            user=self.other_user,
+            avatar=self.other_user_avatar,
+            scheduled_date=date(2026, 8, 25),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/other300.png",
+            is_saved=False,
+        )
+
+    def test_1_create_daily_selection(self):
+        response = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 221,
+        })
+        self.assertIn(response.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        self.assertTrue(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25", outfit_job=self.outfit_job_1).exists())
+        self.assertEqual(response.data["date"], "2026-08-25")
+        self.assertEqual(response.data["outfit_id"], 221)
+        self.assertEqual(response.data["status"], "done")
+
+    def test_2_get_daily_selection(self):
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=date(2026, 8, 25),
+            outfit_job=self.outfit_job_1,
+        )
+        response = self.client.get("/api/v1/outfits/daily-selection/?date=2026-08-25")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["date"], "2026-08-25")
+        self.assertEqual(response.data["outfit_id"], 221)
+
+    def test_3_replace_existing_selection(self):
+        # Initial selection 221
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 221,
+        })
+        self.assertEqual(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25").count(), 1)
+
+        # Replace with selection 219
+        response = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 219,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25").count(), 1)
+
+        selection = DailyOutfitSelection.objects.get(user=self.user, date="2026-08-25")
+        self.assertEqual(selection.outfit_job_id, 219)
+
+    def test_4_different_dates(self):
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 221,
+        })
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-26",
+            "outfit_id": 219,
+        })
+        self.assertEqual(DailyOutfitSelection.objects.filter(user=self.user).count(), 2)
+
+    def test_5_different_users(self):
+        # User A selects Outfit 221 for 2026-08-25
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 221,
+        })
+
+        # User B selects Outfit 300 for 2026-08-25
+        self.client.force_authenticate(user=self.other_user)
+        res_b = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 300,
+        })
+        self.assertIn(res_b.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        self.assertEqual(DailyOutfitSelection.objects.filter(date="2026-08-25").count(), 2)
+
+    def test_6_cross_user_access(self):
+        # User A attempts to select User B's outfit job 300
+        response = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 300,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25").exists())
+
+        # User B creates selection for 2026-08-25
+        DailyOutfitSelection.objects.create(
+            user=self.other_user,
+            date=date(2026, 8, 25),
+            outfit_job=self.other_user_job,
+        )
+        # User A GET request should not see User B's selection
+        get_response = self.client.get("/api/v1/outfits/daily-selection/?date=2026-08-25")
+        self.assertEqual(get_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_7_missing_date(self):
+        response = self.client.get("/api/v1/outfits/daily-selection/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_8_invalid_date(self):
+        res1 = self.client.get("/api/v1/outfits/daily-selection/?date=invalid")
+        self.assertEqual(res1.status_code, status.HTTP_400_BAD_REQUEST)
+
+        res2 = self.client.get("/api/v1/outfits/daily-selection/?date=2026-99-99")
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+
+        res3 = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "invalid-date",
+            "outfit_id": 221,
+        })
+        self.assertEqual(res3.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_9_invalid_outfit(self):
+        response = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 99999,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_10_failed_incomplete_outfit(self):
+        pending_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.PENDING,
+        )
+        failed_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.FAILED,
+        )
+
+        res_pending = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": pending_job.id,
+        })
+        self.assertEqual(res_pending.status_code, status.HTTP_400_BAD_REQUEST)
+
+        res_failed = self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": failed_job.id,
+        })
+        self.assertEqual(res_failed.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_11_saved_and_daily_selection_are_independent(self):
+        # Set outfit 221 as saved
+        self.outfit_job_1.is_saved = True
+        self.outfit_job_1.save()
+        SavedOutfit.objects.create(
+            user=self.user,
+            outfit_job=self.outfit_job_1,
+            date=date(2026, 8, 25),
+        )
+
+        # Select 221 as daily selection
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 221,
+        })
+        self.outfit_job_1.refresh_from_db()
+        self.assertTrue(self.outfit_job_1.is_saved)
+
+        # Select 219 instead as daily selection
+        self.client.post("/api/v1/outfits/daily-selection/", {
+            "date": "2026-08-25",
+            "outfit_id": 219,
+        })
+        self.outfit_job_1.refresh_from_db()
+        self.outfit_job_2.refresh_from_db()
+
+        self.assertTrue(self.outfit_job_1.is_saved)
+        self.assertFalse(self.outfit_job_2.is_saved)
+        self.assertEqual(DailyOutfitSelection.objects.get(user=self.user, date="2026-08-25").outfit_job_id, 219)
+
+    def test_12_1_month_api_regression(self):
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        ids = [item["id"] for item in res.data]
+        self.assertIn(221, ids)
+        self.assertIn(219, ids)
+
+    def test_13_delete_daily_selection(self):
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=date(2026, 8, 25),
+            outfit_job=self.outfit_job_1,
+        )
+        response = self.client.delete("/api/v1/outfits/daily-selection/?date=2026-08-25")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25").exists())
+        # OutfitJob must NOT be deleted
+        self.assertTrue(OutfitJob.objects.filter(pk=221).exists())
+
 
