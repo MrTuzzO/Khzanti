@@ -422,6 +422,28 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
         )
         OutfitJob.objects.filter(pk=other_user_job.pk).update(created_at=now)
 
+        # Create DailyOutfitSelection for recent_job and today_job
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=(now - timedelta(days=2)).date(),
+            outfit_job=recent_job,
+        )
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=now.date(),
+            outfit_job=today_job,
+        )
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=(now - timedelta(days=35)).date(),
+            outfit_job=old_job,
+        )
+        DailyOutfitSelection.objects.create(
+            user=self.other_user,
+            date=now.date(),
+            outfit_job=other_user_job,
+        )
+
         response = self.client.get("/api/v1/outfits/1-months/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -469,6 +491,12 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
             trigger_type=TriggerType.MANUAL,
             status=JobStatus.DONE,
         )
+
+        # Create DailyOutfitSelections
+        DailyOutfitSelection.objects.create(user=self.user, date=date_type(2026, 7, 15), outfit_job=july_2026_job)
+        DailyOutfitSelection.objects.create(user=self.user, date=date_type(2026, 8, 10), outfit_job=august_2026_job)
+        DailyOutfitSelection.objects.create(user=self.user, date=date_type(2024, 2, 29), outfit_job=feb_leap_2024_job)
+        DailyOutfitSelection.objects.create(user=self.user, date=date_type(2026, 2, 28), outfit_job=feb_2026_job)
 
         # 1. Query July 2026 (month=7&year=2026)
         res_july = self.client.get("/api/v1/outfits/1-months/?month=7&year=2026")
@@ -1487,11 +1515,16 @@ class DailyOutfitSelectionAPITestCase(APITestCase):
         self.assertEqual(DailyOutfitSelection.objects.get(user=self.user, date="2026-08-25").outfit_job_id, 219)
 
     def test_12_1_month_api_regression(self):
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=date(2026, 8, 25),
+            outfit_job=self.outfit_job_1,
+        )
         res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [item["id"] for item in res.data]
         self.assertIn(221, ids)
-        self.assertIn(219, ids)
+        self.assertNotIn(219, ids)
 
     def test_13_delete_daily_selection(self):
         DailyOutfitSelection.objects.create(
@@ -1504,5 +1537,271 @@ class DailyOutfitSelectionAPITestCase(APITestCase):
         self.assertFalse(DailyOutfitSelection.objects.filter(user=self.user, date="2026-08-25").exists())
         # OutfitJob must NOT be deleted
         self.assertTrue(OutfitJob.objects.filter(pk=221).exists())
+
+
+class OneMonthDailyOutfitSelectionAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="monthlyuser@example.com",
+            name="Monthly User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="othermonthly@example.com",
+            name="Other Monthly User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.avatar = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+        self.other_avatar = Avatar.objects.create(
+            user=self.other_user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+
+    def test_1_only_daily_selected_outfits_are_returned(self):
+        # Aug 25: Outfit 220, Outfit 221, Outfit 222 generated
+        job_220 = OutfitJob.objects.create(id=220, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_221 = OutfitJob.objects.create(id=221, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_222 = OutfitJob.objects.create(id=222, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+
+        # Select 221 as daily selection for 2026-08-25
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_221)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(returned_ids, [221])
+        self.assertNotIn(220, returned_ids)
+        self.assertNotIn(222, returned_ids)
+
+    def test_2_multiple_days(self):
+        job_218 = OutfitJob.objects.create(id=218, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 24), status=JobStatus.DONE)
+        job_221 = OutfitJob.objects.create(id=221, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_230 = OutfitJob.objects.create(id=230, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 26), status=JobStatus.DONE)
+
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 24), outfit_job=job_218)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_221)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 26), outfit_job=job_230)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(len(returned_ids), 3)
+        self.assertIn(218, returned_ids)
+        self.assertIn(221, returned_ids)
+        self.assertIn(230, returned_ids)
+
+    def test_3_day_without_selection(self):
+        # Aug 26 generated outfits exist, but no DailyOutfitSelection
+        OutfitJob.objects.create(id=230, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 26), status=JobStatus.DONE)
+        OutfitJob.objects.create(id=231, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 26), status=JobStatus.DONE)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data, [])
+
+    def test_4_saved_status_is_irrelevant(self):
+        # Outfit 220 has is_saved = True
+        job_220 = OutfitJob.objects.create(id=220, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE, is_saved=True)
+        # Outfit 221 has is_saved = False
+        job_221 = OutfitJob.objects.create(id=221, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE, is_saved=False)
+
+        # Select 221 as daily selection
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_221)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(returned_ids, [221])
+        self.assertNotIn(220, returned_ids)
+
+    def test_5_user_isolation(self):
+        job_a = OutfitJob.objects.create(id=500, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_b = OutfitJob.objects.create(id=501, user=self.other_user, avatar=self.other_avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_a)
+        DailyOutfitSelection.objects.create(user=self.other_user, date=date(2026, 8, 25), outfit_job=job_b)
+
+        # Authenticate User A
+        self.client.force_authenticate(user=self.user)
+        res_a = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual([item["id"] for item in res_a.data], [500])
+
+        # Authenticate User B
+        self.client.force_authenticate(user=self.other_user)
+        res_b = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual([item["id"] for item in res_b.data], [501])
+
+    def test_6_month_filtering(self):
+        job_july = OutfitJob.objects.create(id=601, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 7, 31), status=JobStatus.DONE)
+        job_aug1 = OutfitJob.objects.create(id=602, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 1), status=JobStatus.DONE)
+        job_aug25 = OutfitJob.objects.create(id=603, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_sept = OutfitJob.objects.create(id=604, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 9, 1), status=JobStatus.DONE)
+
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 7, 31), outfit_job=job_july)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 1), outfit_job=job_aug1)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_aug25)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 9, 1), outfit_job=job_sept)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(len(returned_ids), 2)
+        self.assertIn(602, returned_ids)
+        self.assertIn(603, returned_ids)
+        self.assertNotIn(601, returned_ids)
+        self.assertNotIn(604, returned_ids)
+
+    def test_7_existing_date_parameter_behavior(self):
+        job_aug1 = OutfitJob.objects.create(id=701, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 1), status=JobStatus.DONE)
+        job_aug25 = OutfitJob.objects.create(id=702, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 1), outfit_job=job_aug1)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_aug25)
+
+        # Query with start_date & end_date
+        res_range = self.client.get("/api/v1/outfits/1-months/?start_date=2026-08-20&end_date=2026-08-30")
+        self.assertEqual(res_range.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in res_range.data], [702])
+
+        # Query with month date param (e.g. date=2026-08-01 -> month 2026-08)
+        res_date = self.client.get("/api/v1/outfits/1-months/?date=2026-08-01")
+        self.assertEqual(res_date.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in res_date.data], [701, 702])
+
+    def test_exact_regression_user_scenario(self):
+        # 1. Create OutfitJob 220 for test user (and unselected 221 on August 25)
+        job_220 = OutfitJob.objects.create(
+            id=220,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            status=JobStatus.DONE,
+        )
+        job_221 = OutfitJob.objects.create(
+            id=221,
+            user=self.user,
+            avatar=self.avatar,
+            scheduled_date=date(2026, 8, 25),
+            status=JobStatus.DONE,
+        )
+
+        # 2. Create DailyOutfitSelection: date=2026-08-25, outfit_job=220
+        DailyOutfitSelection.objects.create(
+            user=self.user,
+            date=date(2026, 8, 25),
+            outfit_job=job_220,
+        )
+
+        # 3. GET /api/v1/outfits/1-months/?month=8&year=2026
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+
+        # 4. Assert HTTP 200
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # 5. Assert data is not empty
+        self.assertTrue(len(res.data) > 0)
+
+        # 6. Assert returned OutfitJob ID is 220
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(returned_ids, [220])
+
+        # 7. Assert OutfitJob 221 is NOT returned
+        self.assertNotIn(221, returned_ids)
+
+    def test_one_selection_per_day(self):
+        # Aug 25 -> Outfit A (older)
+        job_a = OutfitJob.objects.create(id=801, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        sel_a = DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_a)
+
+        # Aug 25 -> Outfit B (newer, updated/re-created selection)
+        job_b = OutfitJob.objects.create(id=802, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        sel_a.outfit_job = job_b
+        sel_a.save()
+
+        # Aug 27 -> Outfit C
+        job_c = OutfitJob.objects.create(id=803, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 27), status=JobStatus.DONE)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 27), outfit_job=job_c)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(len(returned_ids), 2)
+        self.assertEqual(returned_ids, [802, 803])
+        self.assertNotIn(801, returned_ids)
+
+    def test_month_isolation_explicit(self):
+        job_july = OutfitJob.objects.create(id=810, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 7, 31), status=JobStatus.DONE)
+        job_aug25 = OutfitJob.objects.create(id=811, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_aug27 = OutfitJob.objects.create(id=812, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 27), status=JobStatus.DONE)
+        job_sept = OutfitJob.objects.create(id=813, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 9, 1), status=JobStatus.DONE)
+
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 7, 31), outfit_job=job_july)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_aug25)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 27), outfit_job=job_aug27)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 9, 1), outfit_job=job_sept)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(returned_ids, [811, 812])
+
+    def test_latest_selection_wins(self):
+        job_219 = OutfitJob.objects.create(id=821, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_220 = OutfitJob.objects.create(id=822, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_221 = OutfitJob.objects.create(id=823, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+
+        sel = DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_219)
+        sel.outfit_job = job_220
+        sel.save()
+        sel.outfit_job = job_221
+        sel.save()
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_ids = [item["id"] for item in res.data]
+        self.assertEqual(returned_ids, [823])
+
+    def test_empty_month(self):
+        res = self.client.get("/api/v1/outfits/1-months/?month=12&year=2030")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data, [])
+
+    def test_same_outfit_job_multiple_dates_regression(self):
+        job_219 = OutfitJob.objects.create(id=919, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_220 = OutfitJob.objects.create(id=920, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 25), status=JobStatus.DONE)
+        job_221 = OutfitJob.objects.create(id=921, user=self.user, avatar=self.avatar, scheduled_date=date(2026, 8, 26), status=JobStatus.DONE)
+
+        # Aug 25 selection 1 (older)
+        sel_25 = DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 25), outfit_job=job_219)
+        # Aug 25 updated to Job 920 (newer)
+        sel_25.outfit_job = job_220
+        sel_25.save()
+
+        # Aug 26 -> Job 921
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 26), outfit_job=job_221)
+        # Aug 27 -> Job 921 (same OutfitJob as Aug 26)
+        DailyOutfitSelection.objects.create(user=self.user, date=date(2026, 8, 27), outfit_job=job_221)
+
+        res = self.client.get("/api/v1/outfits/1-months/?month=8&year=2026")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Assert exactly 3 records returned
+        self.assertEqual(len(res.data), 3)
+
+        items = [(item["id"], item["generated_date"]) for item in res.data]
+        self.assertEqual(items, [(920, "2026-08-25"), (921, "2026-08-26"), (921, "2026-08-27")])
+
+
+
+
 
 

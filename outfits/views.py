@@ -1,11 +1,12 @@
 import asyncio
+import copy
 import json
 import logging
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
 import calendar
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Avg, Count, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -598,8 +599,9 @@ class SavedOutfitRatingsListView(generics.ListAPIView):
 class OneMonthOutfitHistoryView(generics.ListAPIView):
     """
     GET /api/v1/outfits/1-months/
-    Returns the authenticated user's outfit jobs for the requested month and year (or date/start_date/end_date).
+    Returns the authenticated user's selected daily outfits (DailyOutfitSelection) for the requested month and year (or date/start_date/end_date).
     Defaults to the current month if no parameters are supplied.
+    For each calendar day, returns only the latest saved/selected outfit for that day.
     """
 
     permission_classes = [IsAuthenticated]
@@ -607,15 +609,42 @@ class OneMonthOutfitHistoryView(generics.ListAPIView):
 
     def get_queryset(self):
         start_date, end_date = _parse_month_date_range(self.request.query_params)
-        return (
-            OutfitJob.objects.filter(
+        qs = (
+            DailyOutfitSelection.objects.filter(
                 user=self.request.user,
-                scheduled_date__range=(start_date, end_date),
+                date__range=(start_date, end_date),
             )
-            .select_related("avatar")
-            .prefetch_related("wardrobe_items")
-            .order_by("-scheduled_date", "-created_at")
+            .select_related("outfit_job", "outfit_job__avatar")
+            .prefetch_related("outfit_job__wardrobe_items")
+            .order_by("date", "-created_at", "-id")
         )
+
+        if connection.vendor == "postgresql":
+            return qs.distinct("date")
+
+        seen_dates = set()
+        unique_selections = []
+        for sel in qs:
+            if sel.date not in seen_dates:
+                seen_dates.add(sel.date)
+                unique_selections.append(sel)
+        return unique_selections
+
+    def list(self, request, *args, **kwargs):
+        selections = self.get_queryset()
+        outfit_jobs = []
+        for sel in selections:
+            if sel.outfit_job:
+                job = copy.copy(sel.outfit_job)
+                job.scheduled_date = sel.date
+                outfit_jobs.append(job)
+
+        serializer = self.get_serializer(outfit_jobs, many=True)
+        return Response(serializer.data)
+
+
+
+
 
 
 class DailyOutfitSelectionView(APIView):
