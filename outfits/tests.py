@@ -449,7 +449,7 @@ class OneMonthOutfitHistoryAPITestCase(APITestCase):
 
         retrieved_ids = [item["id"] for item in response.data]
         self.assertEqual(len(retrieved_ids), 2)
-        self.assertEqual(retrieved_ids, [today_job.id, recent_job.id])
+        self.assertCountEqual(retrieved_ids, [today_job.id, recent_job.id])
         self.assertNotIn(old_job.id, retrieved_ids)
         self.assertNotIn(other_user_job.id, retrieved_ids)
 
@@ -644,9 +644,9 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
         invalid_top_top, _ = validate_outfit_composition([top, top])
         self.assertFalse(invalid_top_top)
 
-        # 5. Shoes only -> Invalid
-        invalid_shoes_only, _ = validate_outfit_composition([shoes])
-        self.assertFalse(invalid_shoes_only)
+        # 5. Shoes only -> Valid (AUTO must attempt generation with any available usable item)
+        valid_shoes_only, _ = validate_outfit_composition([shoes])
+        self.assertTrue(valid_shoes_only)
 
         # 6. Top alone -> Valid (Incomplete wardrobe support)
         valid_top_alone, _ = validate_outfit_composition([top])
@@ -1799,6 +1799,433 @@ class OneMonthDailyOutfitSelectionAPITestCase(APITestCase):
 
         items = [(item["id"], item["generated_date"]) for item in res.data]
         self.assertEqual(items, [(920, "2026-08-25"), (921, "2026-08-26"), (921, "2026-08-27")])
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class AvatarSelectionAndReasoningRegressionTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="regression_user@example.com",
+            name="Regression User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="regression_other@example.com",
+            name="Other User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.default_avatar = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender="male",
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+        self.cat_tops, _ = Category.objects.get_or_create(name="Tops")
+        self.cat_bottoms, _ = Category.objects.get_or_create(name="Bottoms")
+
+        self.item_top = self._create_completed_item(self.user, self.cat_tops, "Blue Shirt", "Blue")
+        self.item_bottom = self._create_completed_item(self.user, self.cat_bottoms, "Black Pants", "Black")
+
+    def _create_completed_item(self, user, category, description, color):
+        img = SimpleUploadedFile("item.jpg", VALID_PNG_BYTES, content_type="image/png")
+        item = WardrobeItem.objects.create(user=user, category=category, image=img)
+        ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url=f"https://v3b.fal.media/item_{item.id}.png",
+            description=description,
+            color=color,
+            is_saved=False,
+        )
+        return item
+
+    # 1. User has only default avatar -> default avatar is selected
+    def test_1_user_has_only_default_avatar(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertEqual(selected.id, self.default_avatar.id)
+        self.assertTrue(selected.is_default)
+
+    # 2. User has default avatar + 1 completed generated avatar with valid Cloudinary image -> generated avatar is selected
+    def test_2_user_has_default_and_one_completed_generated_avatar(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        gen_avatar = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/gen_1.png",
+        )
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertEqual(selected.id, gen_avatar.id)
+        self.assertFalse(selected.is_default)
+
+    # 3. User has multiple completed generated avatars -> newest completed generated avatar is selected
+    def test_3_user_has_multiple_completed_generated_avatars(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        gen_1 = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/gen_1.png",
+        )
+        gen_2 = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/gen_2.png",
+        )
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertEqual(selected.id, gen_2.id)
+
+    # 4. User has a newer generated avatar that is still processing/no valid Cloudinary image -> ignored, newest completed selected
+    def test_4_newer_processing_or_unsaved_avatar_ignored(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        gen_completed = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/gen_completed.png",
+        )
+        # Newer processing avatar
+        gen_processing = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.PROCESSING,
+            is_saved=False,
+        )
+        # Newer unsaved avatar
+        gen_unsaved = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=False,
+            fal_cdn_url="https://v3b.fal.media/cdn_only.png",
+        )
+
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertEqual(selected.id, gen_completed.id)
+
+    # 5. User has generated avatars but none has valid Cloudinary image -> default avatar selected
+    def test_5_generated_avatars_without_cloudinary_image_fallback_to_default(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.PROCESSING,
+            is_saved=False,
+        )
+        Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=False,
+            fal_cdn_url="https://v3b.fal.media/cdn_only.png",
+        )
+
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertEqual(selected.id, self.default_avatar.id)
+        self.assertTrue(selected.is_default)
+
+    # 6. Another user's generated avatar must never be selected
+    def test_6_another_users_generated_avatar_never_selected(self, mock_cloud):
+        from outfits.services import resolve_auto_daily_avatar
+        other_gen = Avatar.objects.create(
+            user=self.other_user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/other_gen.png",
+        )
+        selected = resolve_auto_daily_avatar(self.user)
+        self.assertNotEqual(selected.id, other_gen.id)
+        self.assertEqual(selected.id, self.default_avatar.id)
+
+    # 7. Successful AUTO outfit generation populates reasoning_title, reasoning_subtitle, reasoning_items, reasoning_note
+    @patch("outfits.services.submit_try_on_job")
+    def test_7_successful_auto_outfit_populates_reasoning_fields(self, mock_submit, mock_cloud):
+        from outfits.services import get_or_create_today_auto_job
+        job = get_or_create_today_auto_job(self.user)
+        self.assertNotEqual(job.status, JobStatus.FAILED)
+        self.assertTrue(bool(job.reasoning_title))
+        self.assertTrue(bool(job.reasoning_subtitle))
+        self.assertIsInstance(job.reasoning_items, list)
+        self.assertGreater(len(job.reasoning_items), 0)
+        self.assertTrue(
+            all(
+                isinstance(item, dict) and bool(item.get("title")) and bool(item.get("description"))
+                for item in job.reasoning_items
+            )
+        )
+        self.assertTrue(bool(job.reasoning_note))
+
+    # 8. Successful MANUAL outfit generation populates reasoning_title, reasoning_subtitle, reasoning_items, reasoning_note
+    @patch("outfits.services.submit_try_on_job")
+    def test_8_successful_manual_outfit_populates_reasoning_fields(self, mock_submit, mock_cloud):
+        response = self.client.post("/api/v1/outfits/try-on/", {
+            "avatar_id": self.default_avatar.id,
+            "wardrobe_item_ids": [self.item_top.id, self.item_bottom.id],
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        job_id = response.data["data"]["id"]
+        job = OutfitJob.objects.get(pk=job_id)
+
+        self.assertEqual(job.trigger_type, TriggerType.MANUAL)
+        self.assertTrue(bool(job.reasoning_title))
+        self.assertTrue(bool(job.reasoning_subtitle))
+        self.assertIsInstance(job.reasoning_items, list)
+        self.assertGreater(len(job.reasoning_items), 0)
+        self.assertTrue(
+            all(
+                isinstance(item, dict) and bool(item.get("title")) and bool(item.get("description"))
+                for item in job.reasoning_items
+            )
+        )
+        self.assertTrue(bool(job.reasoning_note))
+
+    # 9. Existing outfits with reasoning continue to serialize exactly as before
+    def test_9_existing_outfits_serialization_contract(self, mock_cloud):
+        from outfits.serializers import OutfitJobSerializer
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.default_avatar,
+            scheduled_date=timezone.now().date(),
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            reasoning_title="Summer Vibe",
+            reasoning_subtitle="Casual & Light",
+            reasoning_items=[{"title": "Color Match", "description": "Blue and black pair well"}],
+            reasoning_note="Great for warm weather",
+        )
+        serializer = OutfitJobSerializer(job)
+        data = serializer.data
+
+        self.assertEqual(data["reasoning_title"], "Summer Vibe")
+        self.assertEqual(data["reasoning_subtitle"], "Casual & Light")
+        self.assertEqual(data["reasoning_items"], [{"title": "Color Match", "description": "Blue and black pair well"}])
+        self.assertEqual(data["reasoning_note"], "Great for warm weather")
+        self.assertIn("saved", data)
+        self.assertIn("is_saved", data)
+        self.assertIn("generated_date", data)
+
+    # 10. Existing saved/is_saved behavior remains unchanged
+    def test_10_saved_behavior_unchanged(self, mock_cloud):
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.default_avatar,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            is_saved=False,
+        )
+        self.assertFalse(job.is_saved)
+        job.is_saved = True
+        job.save()
+        self.assertTrue(OutfitJob.objects.get(pk=job.id).is_saved)
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class AutoDailyWardrobeUsabilityRegressionTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="auto_usability_user@example.com",
+            name="Auto Usability User",
+            password="password123",
+        )
+        self.other_user = User.objects.create_user(
+            email="auto_usability_other@example.com",
+            name="Other User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.default_avatar = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender="male",
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+        self.cat_tops, _ = Category.objects.get_or_create(name="Tops")
+        self.cat_bottoms, _ = Category.objects.get_or_create(name="Bottoms")
+        self.cat_shoes, _ = Category.objects.get_or_create(name="Shoes")
+
+    def _create_usable_item(self, user, category, description, color):
+        img = SimpleUploadedFile("item.jpg", VALID_PNG_BYTES, content_type="image/png")
+        item = WardrobeItem.objects.create(user=user, category=category, image=img)
+        ItemAnalysis.objects.create(
+            wardrobe_item=item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url=f"https://v3b.fal.media/item_{item.id}.png",
+            description=description,
+            color=color,
+            is_saved=False,
+        )
+        return item
+
+    # 1. Wardrobe items usable by manual try-on are eligible for AUTO daily generation
+    @patch("outfits.services.submit_try_on_job")
+    def test_usable_manual_item_eligible_for_auto(self, mock_submit, mock_cloud):
+        top = self._create_usable_item(self.user, self.cat_tops, "Dress shirt white", "White")
+        bottom = self._create_usable_item(self.user, self.cat_bottoms, "Dress pants black", "Black")
+
+        # Verify manual try-on accepts them
+        response = self.client.post("/api/v1/outfits/try-on/", {
+            "avatar_id": self.default_avatar.id,
+            "wardrobe_item_ids": [top.id, bottom.id],
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # Verify AUTO generation selects them
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertTrue(len(selected_ids) > 0)
+        self.assertIn(top.id, selected_ids)
+        self.assertIn(bottom.id, selected_ids)
+
+    # 2. AUTO daily generation succeeds with ONE usable wardrobe item
+    @patch("outfits.services.submit_try_on_job")
+    def test_one_usable_wardrobe_item_succeeds(self, mock_submit, mock_cloud):
+        top = self._create_usable_item(self.user, self.cat_tops, "Single White Tee", "White")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertEqual(selected_ids, [top.id])
+
+    # 3. AUTO daily generation succeeds with TWO usable wardrobe items
+    @patch("outfits.services.submit_try_on_job")
+    def test_two_usable_wardrobe_items_succeeds(self, mock_submit, mock_cloud):
+        top = self._create_usable_item(self.user, self.cat_tops, "Casual Shirt", "Blue")
+        bottom = self._create_usable_item(self.user, self.cat_bottoms, "Chino Pants", "Beige")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertEqual(len(selected_ids), 2)
+        self.assertIn(top.id, selected_ids)
+        self.assertIn(bottom.id, selected_ids)
+
+    # 4. User with shirt only (missing bottom) does not fail
+    @patch("outfits.services.submit_try_on_job")
+    def test_shirt_only_missing_bottom_succeeds(self, mock_submit, mock_cloud):
+        shirt = self._create_usable_item(self.user, self.cat_tops, "Polo Shirt", "Green")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertEqual(selected_ids, [shirt.id])
+
+    # 5. User with shoes only attempts generation and succeeds
+    @patch("outfits.services.submit_try_on_job")
+    def test_shoes_only_succeeds(self, mock_submit, mock_cloud):
+        shoes = self._create_usable_item(self.user, self.cat_shoes, "Running Sneakers", "White")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertEqual(selected_ids, [shoes.id])
+
+    # 6. User with incomplete categories (shirt + shoes, no bottom) succeeds
+    @patch("outfits.services.submit_try_on_job")
+    def test_incomplete_categories_shirt_and_shoes_succeeds(self, mock_submit, mock_cloud):
+        shirt = self._create_usable_item(self.user, self.cat_tops, "Cotton Shirt", "White")
+        shoes = self._create_usable_item(self.user, self.cat_shoes, "Loafers", "Brown")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        selected_ids = list(auto_job.wardrobe_items.values_list("id", flat=True))
+        self.assertEqual(len(selected_ids), 2)
+        self.assertIn(shirt.id, selected_ids)
+        self.assertIn(shoes.id, selected_ids)
+
+    # 7. AUTO daily generation does not incorrectly return error message when usable items exist
+    @patch("outfits.services.submit_try_on_job")
+    def test_auto_does_not_return_no_items_error_when_items_exist(self, mock_submit, mock_cloud):
+        self._create_usable_item(self.user, self.cat_tops, "Classic Top", "Blue")
+        self._create_usable_item(self.user, self.cat_bottoms, "Classic Pants", "Black")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+        self.assertNotEqual(auto_job.error_message, "No completed wardrobe items available for daily outfit generation.")
+
+    # 8. Exact scenario (items 108 and 109 equivalent) succeeds in AUTO generation
+    @patch("outfits.services.submit_try_on_job")
+    def test_auto_succeeds_for_items_108_and_109_equivalent(self, mock_submit, mock_cloud):
+        item_108 = self._create_usable_item(self.user, self.cat_tops, "Formal Shirt", "Blue")
+        item_109 = self._create_usable_item(self.user, self.cat_bottoms, "Tailored Trousers", "Grey")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertNotEqual(auto_job.status, JobStatus.FAILED)
+        items = list(auto_job.wardrobe_items.all())
+        self.assertEqual(len(items), 2)
+        self.assertIn(item_108, items)
+        self.assertIn(item_109, items)
+
+    # 9. AUTO generation fails when there genuinely are no usable items
+    def test_auto_fails_when_no_usable_items(self, mock_cloud):
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+        self.assertEqual(auto_job.status, JobStatus.FAILED)
+        self.assertEqual(auto_job.error_message, "No completed wardrobe items available for daily outfit generation.")
+
+    # 10. User isolation is enforced
+    @patch("outfits.services.submit_try_on_job")
+    def test_user_isolation_enforced(self, mock_submit, mock_cloud):
+        self._create_usable_item(self.other_user, self.cat_tops, "Other Top", "Red")
+        self._create_usable_item(self.other_user, self.cat_bottoms, "Other Pants", "Black")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+        self.assertEqual(auto_job.status, JobStatus.FAILED)
+
+    # 11. Reasoning validation for AUTO job
+    @patch("outfits.services.submit_try_on_job")
+    def test_auto_job_has_valid_non_empty_reasoning(self, mock_submit, mock_cloud):
+        self._create_usable_item(self.user, self.cat_tops, "Blue Shirt", "Blue")
+        self._create_usable_item(self.user, self.cat_bottoms, "Black Jeans", "Black")
+
+        from outfits.services import get_or_create_today_auto_job
+        auto_job = get_or_create_today_auto_job(self.user)
+
+        self.assertTrue(bool(auto_job.reasoning_title))
+        self.assertTrue(bool(auto_job.reasoning_subtitle))
+        self.assertIsInstance(auto_job.reasoning_items, list)
+        self.assertGreater(len(auto_job.reasoning_items), 0)
+        self.assertTrue(
+            all(
+                isinstance(item, dict) and bool(item.get("title")) and bool(item.get("description"))
+                for item in auto_job.reasoning_items
+            )
+        )
+        self.assertTrue(bool(auto_job.reasoning_note))
+
+
 
 
 

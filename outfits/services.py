@@ -310,6 +310,33 @@ def get_estimated_season(scheduled_date, country: str = "") -> str:
         return "Autumn" if not is_southern else "Spring"
 
 
+def get_user_usable_wardrobe_items(user) -> list:
+    """
+    Returns all wardrobe items belonging to the user that meet the exact
+    usability criteria used by manual try-on:
+    - item.user == user
+    - analysis exists with status == ItemJobStatus.DONE ('done')
+    - analysis has a usable image (display_url or processed_image)
+    """
+    if not user or not getattr(user, "is_authenticated", True):
+        return []
+
+    items = list(
+        WardrobeItem.objects.filter(
+            user=user,
+            analysis__status=ItemJobStatus.DONE,
+        ).select_related("category", "analysis").order_by("-created_at")
+    )
+
+    usable = []
+    for item in items:
+        analysis = getattr(item, "analysis", None)
+        if analysis and (analysis.display_url or analysis.processed_image):
+            usable.append(item)
+
+    return usable
+
+
 def analyze_garment_semantics(item) -> dict:
     """
     Extracts deep semantic attributes from a WardrobeItem and its ItemAnalysis:
@@ -346,8 +373,13 @@ def analyze_garment_semantics(item) -> dict:
         "sherwani", "kurta for men", "boxers"
     ]
 
-    has_fem_keyword = any(kw in combined_text for kw in feminine_desc_kw)
-    has_masc_keyword = any(kw in combined_text for kw in masculine_desc_kw)
+    import re
+    # Remove formal phrases like 'dress shirt', 'dress pants', 'dress shoes', 'dress suit'
+    # so that formal male garments containing 'dress' are not misclassified as feminine dresses.
+    sanitized_text = re.sub(r"\bdress\s+(shirt|pants|trousers|shoes|suit|socks|belt|coat|vest)s?\b", "", combined_text)
+
+    has_fem_keyword = any(re.search(r"\b" + re.escape(kw) + r"\b", sanitized_text) for kw in feminine_desc_kw)
+    has_masc_keyword = any(re.search(r"\b" + re.escape(kw) + r"\b", sanitized_text) for kw in masculine_desc_kw)
 
     if cat_semantics["is_feminine_only"]:
         gender_presentation = "female"
@@ -404,21 +436,29 @@ def is_garment_weather_compatible(semantics: dict, estimated_season: str, countr
 def filter_eligible_wardrobe_items(items, profile_constraints: dict, scheduled_date=None) -> list:
     """
     Filters wardrobe items based on user profile constraints (gender, weather/season).
-    Excludes feminine-only clothing and inappropriate heavy outerwear for male/hot profiles.
+    Excludes feminine-only clothing for male profiles.
+    Falls back to gender-compatible items if strict weather/season filtering excludes all options.
     """
     gender = str(profile_constraints.get("gender") or "").strip().lower()
     country = str(profile_constraints.get("country") or "").strip()
     season = get_estimated_season(scheduled_date, country) if scheduled_date else "Summer"
 
-    eligible = []
+    gender_compatible = []
     for item in items:
         semantics = analyze_garment_semantics(item)
-        if not is_garment_gender_compatible(semantics, gender):
-            continue
-        if not is_garment_weather_compatible(semantics, season, country):
-            continue
-        eligible.append(item)
-    return eligible
+        if is_garment_gender_compatible(semantics, gender):
+            gender_compatible.append(item)
+
+    if not gender_compatible:
+        return []
+
+    weather_compatible = []
+    for item in gender_compatible:
+        semantics = analyze_garment_semantics(item)
+        if is_garment_weather_compatible(semantics, season, country):
+            weather_compatible.append(item)
+
+    return weather_compatible or gender_compatible
 
 
 def validate_outfit_semantic_suitability(selected_items: list, profile_constraints: dict, scheduled_date=None) -> tuple[bool, str]:
@@ -458,7 +498,8 @@ def validate_outfit_composition(selected_items: list) -> tuple[bool, str]:
     """
     Evaluates whether a list of WardrobeItem objects forms a valid, structurally coherent outfit.
     Prevents contradictory combinations (e.g. Full-body + Pants, Full-body + Top, duplicate structural groups).
-    Does NOT require every category (top, bottom, shoes) to be present for incomplete wardrobes.
+    Does NOT require every category or specific combination to be present for incomplete wardrobes.
+    Allows generation even with 1 item, shirt only, shoes only, or incomplete category combinations.
     Returns (is_valid: bool, reason: str).
     """
     if not selected_items:
@@ -475,18 +516,13 @@ def validate_outfit_composition(selected_items: list) -> tuple[bool, str]:
     has_top = any(s["is_top"] for s in semantics_list)
     has_bottom = any(s["is_bottom"] for s in semantics_list)
 
-    # Check 2: Cannot consist ONLY of Shoes and/or Accessories
-    clothing_items = [s for s in semantics_list if not s["is_shoes"] and not s["is_accessory"]]
-    if not clothing_items:
-        return False, "Outfit must contain main clothing garments, not only shoes or accessories."
-
-    # Check 3: Full-body garment compatibility (Cannot combine Full-body with Top or Bottom)
+    # Check 2: Full-body garment compatibility (Cannot combine Full-body with Top or Bottom)
     if has_full_body:
         if has_top or has_bottom:
             return False, "Invalid outfit composition: Full-body garment cannot be combined with separate top or bottom."
         return True, "Valid full-body outfit composition."
 
-    # Check 4: Incomplete wardrobes (Top alone, Bottom alone, Top+Outerwear, Bottom+Outerwear, Top+Bottom) are ALL valid!
+    # Check 3: Any available item or combination (1 item, shirt only, shoes only, top+bottom, etc.) is valid!
     return True, "Valid outfit composition."
 
 
@@ -497,6 +533,190 @@ def resolve_tryon_avatar(user, requested_style=None):
     return resolve_user_default_avatar(user, requested_style=requested_style)
 
 
+def resolve_auto_daily_avatar(user):
+    """
+    Avatar selection specifically for daily AUTOMATIC outfit generation:
+    PRIORITY 1:
+    Use the user's MOST RECENTLY GENERATED AVATAR if that avatar has actually
+    been successfully saved/available on Cloudinary (user=user, is_default=False,
+    status=DONE, is_saved=True, non-empty result_image).
+
+    PRIORITY 2:
+    If there is no generated avatar with a valid Cloudinary image, use the user's
+    DEFAULT AVATAR (is_default=True).
+    """
+    if user and user.is_authenticated:
+        generated_avatar = (
+            Avatar.objects.filter(
+                user=user,
+                is_default=False,
+                status=Avatar.JobStatus.DONE,
+                is_saved=True,
+            )
+            .exclude(result_image="")
+            .exclude(result_image__isnull=True)
+            .order_by("-created_at")
+            .first()
+        )
+        if generated_avatar:
+            return generated_avatar
+
+    user_gender = "male"
+    if user and user.is_authenticated:
+        profile = getattr(user, "customer_profile", None)
+        if profile and profile.gender in ("male", "female"):
+            user_gender = profile.gender
+
+    system_default = Avatar.objects.filter(
+        is_default=True,
+        gender=user_gender,
+    ).first()
+
+    if not system_default:
+        system_default = Avatar.objects.filter(is_default=True).first()
+
+    if not system_default:
+        system_default = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender=user_gender,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+    return system_default
+
+
+def generate_outfit_reasoning(user, items: list, scheduled_date=None) -> dict:
+    """
+    Generates AI reasoning for a given outfit (set of WardrobeItem objects) and user profile.
+    Used for BOTH automatic and manual outfit generation.
+    Returns a dictionary with:
+    - title (str)
+    - subtitle (str)
+    - reasons (list of dicts with 'title' and 'description')
+    - style_note (str)
+    """
+    weekday_name = scheduled_date.strftime("%A") if scheduled_date else timezone.now().strftime("%A")
+
+    fallback_reasoning = {
+        "title": "Daily Outfit Recommendation",
+        "subtitle": "Smart automated outfit combination",
+        "reasons": [
+            {
+                "title": "Style & Color Harmony",
+                "description": "Selected garments create a cohesive and well-proportioned aesthetic."
+            }
+        ],
+        "style_note": f"A balanced look tailored for your profile and {weekday_name}."
+    }
+
+    if not items:
+        return fallback_reasoning
+
+    profile_constraints = get_profile_constraints(user)
+    gender = profile_constraints.get("gender") or "unspecified"
+    aesthetics = profile_constraints.get("aesthetics") or []
+    country = profile_constraints.get("country") or "unspecified"
+    age = profile_constraints.get("age") or "unspecified"
+    body_type = profile_constraints.get("body_type") or "unspecified"
+    height = profile_constraints.get("height") or "unspecified"
+    estimated_season = get_estimated_season(scheduled_date or timezone.now().date(), country)
+
+    item_descriptions = []
+    for item in items:
+        sem = analyze_garment_semantics(item)
+        item_descriptions.append({
+            "id": item.id,
+            "category": sem["category_name"],
+            "color": sem["color"] or "unspecified",
+            "description": sem["description"] or "",
+        })
+
+    api_key = getattr(settings, "OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    model_name = getattr(settings, "OPENAI_MODEL", "gpt-5.1") or os.getenv("OPENAI_MODEL", "gpt-5.1")
+
+    if not api_key:
+        logger.info("[OUTFIT REASONING] OPENAI_API_KEY is not set. Returning fallback reasoning.")
+        return fallback_reasoning
+
+    try:
+        client = OpenAI(api_key=api_key)
+        system_prompt = (
+            "You are an expert AI fashion stylist for Fashion Hub AI (Hdoomi).\n"
+            "Your goal is to provide concise, elegant, and insightful reasoning explaining why the provided outfit combination works well for the user.\n\n"
+            "STRICT RULES:\n"
+            "1. Base your reasoning on the actual items in the outfit and user profile.\n"
+            "2. Return strictly a JSON object matching this schema:\n"
+            "{\n"
+            '  "title": "Catchy title for the look",\n'
+            '  "subtitle": "Short subtitle summarizing the aesthetic",\n'
+            '  "reasons": [\n'
+            '    {"title": "Reason Title", "description": "Clear explanation of style/color/fit harmony"}\n'
+            '  ],\n'
+            '  "style_note": "A practical styling tip"\n'
+            "}"
+        )
+
+        user_prompt = f"""
+User Profile:
+- Gender: {gender}
+- Aesthetics: {json.dumps(aesthetics)}
+- Age: {age}
+- Country: {country}
+- Body Type: {body_type}
+- Height: {height}
+
+Context:
+- Day: {weekday_name}
+- Season: {estimated_season}
+
+Outfit Items:
+{json.dumps(item_descriptions, indent=2)}
+
+Return strictly a JSON object with title, subtitle, reasons (array of {{title, description}}), and style_note.
+"""
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+
+        raw_content = response.choices[0].message.content or "{}"
+        parsed = json.loads(raw_content)
+
+        title = str(parsed.get("title") or fallback_reasoning["title"])
+        subtitle = str(parsed.get("subtitle") or fallback_reasoning["subtitle"])
+        reasons = parsed.get("reasons")
+        if not isinstance(reasons, list) or not reasons:
+            reasons = fallback_reasoning["reasons"]
+        else:
+            clean_reasons = []
+            for r in reasons:
+                if isinstance(r, dict) and "title" in r and "description" in r:
+                    clean_reasons.append({"title": str(r["title"]), "description": str(r["description"])})
+            reasons = clean_reasons or fallback_reasoning["reasons"]
+
+        style_note = str(parsed.get("style_note") or fallback_reasoning["style_note"])
+
+        return {
+            "title": title,
+            "subtitle": subtitle,
+            "reasons": reasons,
+            "style_note": style_note,
+        }
+    except Exception as exc:
+        logger.error("[OUTFIT REASONING] OpenAI reasoning generation failed: %s. Using fallback.", exc)
+        return fallback_reasoning
+
+
 def select_auto_tryon_assets(user, scheduled_date):
     """
     Fallback asset selector when OpenAI selection is bypassed or unavailable.
@@ -505,7 +725,7 @@ def select_auto_tryon_assets(user, scheduled_date):
     - Dynamically builds the best possible outfit composition from available items (does NOT require all categories).
     - Validates both semantic suitability and structural non-contradiction.
     """
-    avatar = resolve_tryon_avatar(user)
+    avatar = resolve_auto_daily_avatar(user)
     profile_constraints = get_profile_constraints(user)
 
     past_dates = [scheduled_date - timedelta(days=i) for i in range(1, 4)]
@@ -519,12 +739,9 @@ def select_auto_tryon_assets(user, scheduled_date):
     for past_job in recent_auto_jobs:
         recent_item_ids.update(past_job.wardrobe_items.values_list("id", flat=True))
 
-    all_completed = list(
-        WardrobeItem.objects.filter(
-            user=user,
-            analysis__status=ItemJobStatus.DONE,
-        ).select_related("category", "analysis").order_by("-created_at")
-    )
+    all_completed = get_user_usable_wardrobe_items(user)
+    if not all_completed:
+        return avatar, []
 
     eligible_items = filter_eligible_wardrobe_items(all_completed, profile_constraints, scheduled_date)
     if not eligible_items:
@@ -572,15 +789,21 @@ def select_auto_tryon_assets(user, scheduled_date):
         if candidates_by_group["accessory"]:
             selected_items.append(pick_item(candidates_by_group["accessory"]))
 
+    if not selected_items and eligible_items:
+        # Ultimate fallback: pick 1 item per available category from eligible items
+        seen_cats = set()
+        for item in eligible_items:
+            if item.category_id not in seen_cats:
+                seen_cats.add(item.category_id)
+                selected_items.append(item)
+
     is_sem_valid, _ = validate_outfit_semantic_suitability(selected_items, profile_constraints, scheduled_date)
     is_comp_valid, _ = validate_outfit_composition(selected_items)
-    if not is_sem_valid or not is_comp_valid:
-        return avatar, []
+    if (not is_sem_valid or not is_comp_valid) and len(selected_items) > 1:
+        # Fall back to single top/bottom/full_body if full combination had structural contradictions
+        selected_items = [selected_items[0]]
 
     return avatar, selected_items
-
-
-
 
 
 def select_auto_outfit_combination(user, scheduled_date):
@@ -591,25 +814,17 @@ def select_auto_outfit_combination(user, scheduled_date):
     Validates selection against centralized gender eligibility and composition rules.
     """
     profile_constraints = get_profile_constraints(user)
-    avatar = resolve_tryon_avatar(user)
+    avatar = resolve_auto_daily_avatar(user)
 
-    all_completed = list(
-        WardrobeItem.objects.filter(
-            user=user,
-            analysis__status=ItemJobStatus.DONE,
-        ).select_related("category", "analysis").order_by("-created_at")
-    )
+    all_completed = get_user_usable_wardrobe_items(user)
+    if not all_completed:
+        logger.warning("[AUTO OUTFIT] User %s has 0 eligible completed wardrobe items.", user.id if user else "anonymous")
+        return avatar, [], generate_outfit_reasoning(user, [], scheduled_date)
 
-    eligible_items = filter_eligible_wardrobe_items(all_completed, profile_constraints)
-
+    eligible_items = filter_eligible_wardrobe_items(all_completed, profile_constraints, scheduled_date)
     if not eligible_items:
-        logger.warning("[AUTO OUTFIT] User %s has 0 eligible completed wardrobe items.", user.id)
-        return avatar, [], {
-            "title": "No Eligible Wardrobe Items Available",
-            "subtitle": "Upload items to generate daily outfits",
-            "reasons": [],
-            "style_note": "Please upload and process wardrobe items compatible with your profile."
-        }
+        logger.warning("[AUTO OUTFIT] User %s has 0 eligible completed wardrobe items.", user.id if user else "anonymous")
+        return avatar, [], generate_outfit_reasoning(user, [], scheduled_date)
 
     candidate_map = {item.id: item for item in eligible_items}
     candidate_data = []
@@ -654,12 +869,8 @@ def select_auto_outfit_combination(user, scheduled_date):
     if not api_key:
         logger.warning("[AUTO OUTFIT] OPENAI_API_KEY is not set. Falling back to default selection.")
         _, fallback_items = select_auto_tryon_assets(user, scheduled_date)
-        return avatar, fallback_items, {
-            "title": "Daily Outfit Recommendation",
-            "subtitle": "Smart automated outfit combination",
-            "reasons": [{"title": "Default Selection", "description": "Automated style pairing"}],
-            "style_note": f"A balanced look curated for {weekday_name}."
-        }
+        reasoning_dict = generate_outfit_reasoning(user, fallback_items, scheduled_date)
+        return avatar, fallback_items, reasoning_dict
 
     try:
         logger.info("[AUTO OUTFIT] OpenAI selection started using model '%s' for gender=%s...", model_name, gender)
@@ -674,8 +885,9 @@ def select_auto_outfit_combination(user, scheduled_date):
             "4. Male users MUST NEVER be assigned garments with 'female' gender presentation (e.g. dresses, feminine kaftans with draped bodices, skirts, abayas, borkhas).\n"
             "5. Heavy outerwear (e.g., trench coats, heavy overcoats) MUST NOT be paired with hot summer weather contexts (e.g. Bangladesh in August).\n"
             "6. OUTFIT STRUCTURE RULES:\n"
-            "   - Select EITHER (1 Top + 1 Bottom) OR (1 Full-body garment e.g. Suit/Thobe/Kandura).\n"
-            "   - You may add 1 Shoes, 1 Outerwear, and 1 Accessory if eligible candidates exist.\n"
+            "   - Select the best available combination of items from the provided candidate list.\n"
+            "   - If only 1 item or incomplete categories are available (e.g. shirt only, shoes only, top + shoes), select those available items! Never fail or return empty selected items when candidate items exist.\n"
+            "   - Maximum 1 item per category (e.g., 1 Top, 1 Bottom, 1 Full-body, 1 Shoes, 1 Outerwear, 1 Accessory).\n"
             "   - NEVER combine a Full-body garment with separate pants or tops.\n"
             "7. Avoid repeating the exact combination of item IDs used in any of the previous 3 days if alternatives exist.\n"
             "8. Return strictly a JSON object adhering to the JSON schema."
@@ -731,24 +943,16 @@ Return JSON adhering to:
     except Exception as exc:
         logger.error("[AUTO OUTFIT] OpenAI API call failed: %s. Using fallback asset selector.", exc)
         _, fallback_items = select_auto_tryon_assets(user, scheduled_date)
-        return avatar, fallback_items, {
-            "title": "Daily Outfit Recommendation",
-            "subtitle": "Smart automated outfit combination",
-            "reasons": [{"title": "Fallback Selection", "description": "Curated default style pairing"}],
-            "style_note": f"A balanced look curated for {weekday_name}."
-        }
+        reasoning_dict = generate_outfit_reasoning(user, fallback_items, scheduled_date)
+        return avatar, fallback_items, reasoning_dict
 
     # --- 10-POINT BACKEND VALIDATION ---
     selected_ids = parsed.get("selected_item_ids")
     if not isinstance(selected_ids, list) or not selected_ids:
         logger.warning("[AUTO OUTFIT] OpenAI response invalid or empty. Falling back.")
         _, fallback_items = select_auto_tryon_assets(user, scheduled_date)
-        return avatar, fallback_items, {
-            "title": f"Daily Look for {weekday_name}",
-            "subtitle": "Curated Outfit",
-            "reasons": [],
-            "style_note": "Curated daily outfit."
-        }
+        reasoning_dict = generate_outfit_reasoning(user, fallback_items, scheduled_date)
+        return avatar, fallback_items, reasoning_dict
 
     selected_items = []
     for item_id in selected_ids:
@@ -775,15 +979,15 @@ Return JSON adhering to:
         selected_items = fallback_items
 
     reasoning = parsed.get("reasoning", {})
-    if not isinstance(reasoning, dict):
-        reasoning = {}
-
-    reasoning_dict = {
-        "title": str(reasoning.get("title", f"Daily Look for {weekday_name}")),
-        "subtitle": str(reasoning.get("subtitle", "Curated AI Outfit")),
-        "reasons": reasoning.get("reasons", []),
-        "style_note": str(reasoning.get("style_note", "")),
-    }
+    if not isinstance(reasoning, dict) or not reasoning.get("reasons"):
+        reasoning_dict = generate_outfit_reasoning(user, selected_items, scheduled_date)
+    else:
+        reasoning_dict = {
+            "title": str(reasoning.get("title", f"Daily Look for {weekday_name}")),
+            "subtitle": str(reasoning.get("subtitle", "Curated AI Outfit")),
+            "reasons": reasoning.get("reasons", []),
+            "style_note": str(reasoning.get("style_note", "")),
+        }
 
     return avatar, selected_items, reasoning_dict
 
@@ -830,11 +1034,7 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
         ai_error_msg = str(exc)
 
     if ai_failed:
-        avatar = Avatar.objects.filter(user=user).order_by("-created_at").first() or Avatar.objects.filter(is_default=True).first()
-        if not avatar:
-            avatar = Avatar.objects.create(
-                user=None, is_default=True, status=Avatar.JobStatus.DONE, style=Avatar.Style.REALISTIC
-            )
+        avatar = resolve_auto_daily_avatar(user)
         job = OutfitJob.objects.create(
             user=user,
             avatar=avatar,
@@ -848,7 +1048,7 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
         return job
 
     if not selected_items:
-        avatar = avatar or Avatar.objects.filter(is_default=True).first()
+        avatar = avatar or resolve_auto_daily_avatar(user)
         job = OutfitJob.objects.create(
             user=user,
             avatar=avatar,

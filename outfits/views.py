@@ -99,11 +99,19 @@ class TryOnCreateView(generics.ListCreateAPIView):
         avatar = serializer.validated_data["avatar"]
         items = serializer.validated_data["wardrobe_items"]
 
+        from .services import generate_outfit_reasoning
+        reasoning_dict = generate_outfit_reasoning(request.user, items)
+
         # Create OutfitJob
         job = OutfitJob.objects.create(
             user=request.user,
             avatar=avatar,
             status=JobStatus.PENDING,
+            trigger_type=TriggerType.MANUAL,
+            reasoning_title=reasoning_dict.get("title", ""),
+            reasoning_subtitle=reasoning_dict.get("subtitle", ""),
+            reasoning_items=reasoning_dict.get("reasons", []),
+            reasoning_note=reasoning_dict.get("style_note", ""),
         )
         job.wardrobe_items.set(items)
 
