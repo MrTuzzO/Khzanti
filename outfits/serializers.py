@@ -8,6 +8,23 @@ from .models import DailyOutfitSelection, JobStatus, OutfitJob, OutfitRating, Sa
 User = get_user_model()
 
 
+class NullableScalarModelSerializerMixin:
+    """
+    Mixin for ModelSerializer classes to normalize empty scalar string
+    values ("") into None (JSON null) in API response representations.
+    Preserves list/collection fields as empty arrays [], dicts as {},
+    booleans, numbers, and non-empty strings.
+    """
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if isinstance(ret, dict):
+            for key, val in list(ret.items()):
+                if val == "":
+                    ret[key] = None
+        return ret
+
+
 class TryOnCreateSerializer(serializers.Serializer):
     avatar_id = serializers.IntegerField(
         required=False,
@@ -99,7 +116,7 @@ class TryOnCreateSerializer(serializers.Serializer):
         return attrs
 
 
-class OutfitJobSerializer(serializers.ModelSerializer):
+class OutfitJobSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
@@ -134,13 +151,13 @@ class OutfitJobSerializer(serializers.ModelSerializer):
         return url if url else None
 
 
-class OutfitJobStatusSerializer(serializers.Serializer):
+class OutfitJobStatusSerializer(NullableScalarModelSerializerMixin, serializers.Serializer):
     status = serializers.CharField()
     result_image = serializers.CharField(allow_null=True)
-    error_message = serializers.CharField(required=False, allow_blank=True)
+    error_message = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
-class TodayOutfitSerializer(serializers.ModelSerializer):
+class TodayOutfitSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     date = serializers.DateField(source="scheduled_date", read_only=True)
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
@@ -285,7 +302,7 @@ class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-class SavedOutfitSerializer(serializers.ModelSerializer):
+class SavedOutfitSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     saved_date = serializers.DateField(source="date", read_only=True)
     outfit_job = OutfitJobSerializer(read_only=True)
 
@@ -312,7 +329,7 @@ class OutfitRatingSerializer(serializers.ModelSerializer):
         fields = RATING_CATEGORIES
 
 
-class PublicSavedOutfitSerializer(serializers.ModelSerializer):
+class PublicSavedOutfitSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     saved_date = serializers.DateField(source="date", read_only=True)
     outfit_job = OutfitJobSerializer(read_only=True)
     ratings_count = serializers.IntegerField(read_only=True, default=0)
@@ -351,7 +368,7 @@ class PublicSavedOutfitSerializer(serializers.ModelSerializer):
         }
 
 
-class RaterSerializer(serializers.ModelSerializer):
+class RaterSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     """Small user card identifying who submitted a rating."""
 
     class Meta:
@@ -360,7 +377,7 @@ class RaterSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class SavedOutfitRatingDetailSerializer(serializers.ModelSerializer):
+class SavedOutfitRatingDetailSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     """
     One individual rating with who gave it — only ever shown to the outfit's
     owner (see SavedOutfitRatingsListView), never on the public profile.
@@ -400,7 +417,7 @@ class DailyOutfitSelectionCreateSerializer(serializers.Serializer):
         return attrs
 
 
-class DailyOutfitSelectionSerializer(serializers.ModelSerializer):
+class DailyOutfitSelectionSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     outfit_id = serializers.IntegerField(source="outfit_job.id", read_only=True)
     result_image = serializers.SerializerMethodField()
     trigger_type = serializers.CharField(source="outfit_job.trigger_type", read_only=True)
