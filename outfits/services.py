@@ -19,54 +19,84 @@ FAL_TRY_ON_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 def build_try_on_prompt(avatar: Avatar, items: list) -> str:
     """
-    Constructs a highly detailed, instruction-rich prompt for fal-ai/nano-banana-pro/edit.
-    Establishes Image 1 as the Avatar base subject, followed by reference wardrobe items (Image 2, 3, etc.).
+    Constructs a detailed, instruction-rich prompt for fal-ai/nano-banana-pro/edit.
+    Establishes Image 1 as the PRIMARY Authoritative Base Scene/Subject, followed by secondary wardrobe design references (Image 2, 3, etc.).
     """
-    avatar_style_desc = (
-        "photorealistic human avatar" if avatar.style == Avatar.Style.REALISTIC else "cartoon/stylized avatar"
-    )
-    style_preservation_instruction = (
-        "Preserve the exact photorealistic human appearance, natural skin texture, face structure, hairstyle, and body proportions of the base avatar."
-        if avatar.style == Avatar.Style.REALISTIC
-        else "Preserve the exact cartoon/stylized art style, character design, facial features, and body proportions of the base avatar. Do NOT convert into a realistic human."
-    )
+    is_realistic = (avatar.style == Avatar.Style.REALISTIC)
+    avatar_style_desc = "photorealistic human photograph" if is_realistic else "cartoon / stylized / illustrated artwork"
+
+    if is_realistic:
+        style_specific_instructions = (
+            "STYLE EXECUTION — PHOTOREALISTIC RENDERING (ONE-CAMERA / ONE-PHOTOGRAPH RULE):\n"
+            "- Render the clothing with the EXACT SAME photographic quality and realism as the avatar in Image 1.\n"
+            "- The garments must exhibit authentic fabric microtexture, realistic material response to light, subtle tonal variations, physically plausible folds, and natural edge softness against the skin.\n"
+            "- The entire image must share the avatar's exact single light source, lighting direction, shadow softness, exposure, white balance, color temperature, contrast, tonal range, depth of field, sharpness, image grain, and lens characteristics.\n"
+            "- There must be ZERO difference in rendering fidelity between the person's skin and the clothing.\n"
+            "- STRICTLY PROHIBITED: Do NOT make the clothing look cleaner, flatter, sharper, smoother, or more digitally rendered than the person. The clothing must NEVER look like a 3D asset, sticker, cutout, pasted layer, illustration, or digitally painted overlay."
+        )
+    else:
+        style_specific_instructions = (
+            "STYLE EXECUTION — CARTOON / ILLUSTRATED / STYLIZED RENDERING:\n"
+            "- Reconstruct all garments in the EXACT SAME visual language and artistic medium as the avatar in Image 1.\n"
+            "- Match the avatar's rendering technique, line quality, outline thickness, flat/cel/gradient shading, highlights, color palette treatment, texture abstraction, and level of artistic detail.\n"
+            "- Any photorealistic reference photo must be completely stylized and redrawn to match the avatar's world.\n"
+            "- Never place a photorealistic garment or real photographic texture onto a cartoon avatar."
+        )
 
     prompt_parts = [
-        f"HIGH PRIORITY VIRTUAL TRY-ON VISUALIZATION:",
-        f"1. BASE SUBJECT (Image 1): The person in Image 1 is the primary base subject ({avatar_style_desc}). {style_preservation_instruction} Keep the avatar's face, identity, pose, and overall visual composition intact.",
-        f"2. WARDROBE REFERENCE ITEMS:",
+        "MANDATORY EXECUTION DIRECTIVE — ONE-SHOT COHESIVE VIRTUAL TRY-ON & GARMENT RECONSTRUCTION:",
+        "",
+        f"1. IMAGE 1 — AVATAR IS THE PRIMARY AUTHORITATIVE PHOTOGRAPHIC SOURCE ({avatar_style_desc}):",
+        "- The avatar in Image 1 is the AUTHORITATIVE BASE SCENE that dictates the entire visual world of the final image.",
+        "- STRICTLY PRESERVE: the person's exact identity, facial features, expression, gender, skin appearance, hair, body proportions, anatomy, pose, camera position, camera angle, framing, perspective, background environment, lighting direction, exposure, white balance, contrast, depth, and image characteristics.",
+        "- The final image must look as though THIS EXACT PERSON was originally photographed/rendered wearing the requested outfit.",
+        "- Do NOT repaint, restyle, regenerate, beautify, or reinterpret the avatar. Adapt the clothing to the person — NEVER alter the person to fit the clothing.",
+        "",
+        "2. WARDROBE IMAGES ARE DESIGN SPECIFICATIONS ONLY (NOT A PIXEL SOURCE):",
+        "- The wardrobe images (Image 2, 3, etc.) are DESIGN BLUEPRINTS used ONLY to understand garment identity, NOT photographic layers to paste onto the avatar.",
+        "- EXTRACT ONLY the garment's design identity: category, overall silhouette, cut, color, material appearance, collar/neckline, sleeves, cuffs, buttons, pockets, seams, hems, fabric pattern, print, embroidery, and distinctive design details.",
+        "- STRICTLY DISCARD all source-image photographic defects from wardrobe photos: DO NOT copy their lighting, shadows, highlights, wrinkles, camera perspective, background, low image quality, color grading, noise, distortion, or flat cutout appearance.",
     ]
 
     for idx, item in enumerate(items, start=2):
         category_name = getattr(item.category, "name", "clothing item")
         analysis = getattr(item, "analysis", None)
         color = getattr(analysis, "color", "") if analysis else ""
-        color_str = f" in color {color}" if color else ""
+        desc = getattr(analysis, "description", "") if analysis else ""
+        details = []
+        if color:
+            details.append(f"color: {color}")
+        if desc:
+            details.append(f"description: {desc}")
+        details_str = f" ({', '.join(details)})" if details else ""
         prompt_parts.append(
-            f"   - Image {idx} represents the reference {category_name}{color_str}. "
-            f"You MUST retain this garment's exact color, fabric appearance, material, texture, pattern, print, embroidery, seams, silhouette, and distinctive design elements."
+            f"   - Image {idx}: Reference {category_name}{details_str}. "
+            f"Extract and reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)."
         )
 
     prompt_parts.extend([
-        "3. NATURAL GARMENT FITTING & PLACEMENT:",
-        "- Reconstruct and fit each reference item naturally onto the avatar's body.",
-        "- Borkha / dresses / tops / pants must be worn on the torso and body.",
-        "- Hijab / headwear must be naturally worn on the head and neck.",
-        "- Shoes / footwear must be naturally worn on the feet.",
-        "- Bags / accessories must be held or worn in appropriate contact points.",
-        "4. LAYERING, OCCLUSION & CLOTHING INTERACTION:",
-        "- Ensure physically natural clothing overlap (e.g., Hijab drapes over the head and shoulders, layering neatly around the neckline over the Borkha).",
-        "- Account for natural garment draping, body contouring, folds, depth, contact points, lighting, and realistic shadows.",
-        "- Do NOT paste items as flat stickers, do NOT leave clothing floating or beside the subject.",
-        "5. STRICT PRESERVATION & NO INVENTED ITEMS:",
-        "- Maintain the avatar's exact gender, body structure, facial identity, skin tone, and hairstyle.",
-        "- Do NOT transform tops into dresses, do NOT convert pants into skirts, and do NOT alter garment length or category.",
-        "- Preserve each reference garment's exact category, silhouette, color, fabric, and design identity.",
-        "- Include ONLY the selected reference wardrobe items worn by the avatar.",
-        "- Do NOT invent or add any extra unselected clothing layers, random jewelry, or unrequested accessories.",
-        f"The final output must be a single, cohesive, high-quality visual try-on image maintaining the avatar's exact visual style ({avatar.style})."
+        "",
+        "3. RECREATE THE GARMENT FROM SCRATCH ON THE AVATAR (NO COMPOSITING / NO PASTING):",
+        "- Newly render each garment from scratch around the avatar's actual 3D body structure.",
+        "- The garment must naturally follow the contours of the chest, shoulders, torso, waist, arms, hips, and legs.",
+        "- Create natural physical fabric behavior: realistic draping, dynamic tension, compression folds, natural wrinkles, fabric thickness, contact shadows, ambient occlusion, and soft edge blending.",
+        "- Multi-garment layering must follow natural physical hierarchy (e.g., shirts tucked into pants, jackets worn over tops, hijabs/headwear draped over head and contouring naturally over the collar/neckline).",
+        "",
+        "4. ONE CAMERA / ONE PHOTOGRAPH INTEGRATION:",
+        style_specific_instructions,
+        "",
+        "5. VISUAL COHERENCE & QUALITY STANDARD:",
+        "- CRITICAL TEST: The final result must look like ONE SINGLE PROFESSIONAL PHOTOGRAPH created with the person already wearing the outfit. There must be ZERO visual separation or perceived layer boundary between the person and the clothing.",
+        "- Include ONLY the specified wardrobe items. Do NOT invent unrequested accessories, extra layers, or unselected garments.",
+        "",
+        "6. PRIORITY HIERARCHY WHEN REFERENCES CONFLICT:",
+        "   1. Avatar's visual style, lighting, camera, anatomy, and scene environment (Authoritative)",
+        "   2. Natural physical integration and fabric draping on the avatar's body",
+        "   3. Garment design identity from the wardrobe reference",
+        "   4. Minor decorative details from the wardrobe reference",
+        "",
+        f"FINAL OUTPUT: A single, seamlessly unified masterwork where the {avatar_style_desc} appears naturally and authentically dressed in the requested wardrobe outfit."
     ])
-
 
     return "\n".join(prompt_parts)
 
@@ -143,6 +173,52 @@ def submit_try_on_job(job: OutfitJob) -> OutfitJob:
     Synchronous wrapper around submit_try_on_job_async.
     """
     return async_to_sync(submit_try_on_job_async)(job)
+
+
+def sync_outfit_job_status(job: OutfitJob) -> OutfitJob:
+    """
+    Checks try-on job status with fal.ai and updates DB accordingly.
+    Fallback when webhooks are missed/delayed (e.g. local ngrok offline).
+    Idempotent: returns immediately if job is already DONE, FAILED, or has no fal_request_id.
+    """
+    if job.status in (JobStatus.DONE, JobStatus.FAILED) or not job.fal_request_id:
+        return job
+
+    try:
+        status_info = fal_client.status(FAL_TRY_ON_MODEL_ID, job.fal_request_id)
+        if isinstance(status_info, fal_client.Completed):
+            if getattr(status_info, "error", None):
+                raise Exception(f"fal.ai error: {status_info.error}")
+
+            res = fal_client.result(FAL_TRY_ON_MODEL_ID, job.fal_request_id)
+            image_url = None
+            if isinstance(res, dict):
+                if res.get("image") and isinstance(res["image"], dict):
+                    image_url = res["image"].get("url")
+                elif res.get("image") and isinstance(res["image"], str):
+                    image_url = res["image"]
+                elif res.get("images") and isinstance(res["images"], list) and len(res["images"]) > 0:
+                    first_img = res["images"][0]
+                    image_url = first_img.get("url") if isinstance(first_img, dict) else first_img
+
+            if not image_url:
+                raise Exception(f"No image URL returned in fal.ai result: {res}")
+
+            job.fal_cdn_url = image_url
+            job.status = JobStatus.DONE
+            job.is_saved = False
+            job.error_message = ""
+            job.internal_error_detail = ""
+            job.save(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
+    except Exception as exc:
+        raw_error = str(exc)
+        logger.error("OutfitJob %s status sync failed: %s", job.id, raw_error, exc_info=True)
+        job.status = JobStatus.FAILED
+        job.internal_error_detail = raw_error
+        job.error_message = _friendly_error_message(raw_error)
+        job.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
+    return job
 
 
 def save_try_on_to_cloudinary(job: OutfitJob, saved_date=None) -> OutfitJob:
