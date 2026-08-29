@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'outfits',
     'model3d',
     'social',
+    'feed',
     'django_cleanup.apps.CleanupConfig',
 ]
 
