@@ -1,10 +1,28 @@
 import os
 import uuid
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from .models import Avatar
 
 
-class AvatarCreateSerializer(serializers.ModelSerializer):
+class NullableScalarModelSerializerMixin:
+    """
+    Mixin for ModelSerializer classes to normalize empty scalar string
+    values ("") into None (JSON null) in API response representations.
+    Preserves list/collection fields as empty arrays [], dicts as {},
+    booleans, numbers, and non-empty strings.
+    """
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if isinstance(ret, dict):
+            for key, val in list(ret.items()):
+                if val == "":
+                    ret[key] = None
+        return ret
+
+
+class AvatarCreateSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     source_photo = serializers.ImageField(required=True)
     style = serializers.ChoiceField(
         choices=Avatar.Style.choices,
@@ -32,13 +50,8 @@ class SystemDefaultAvatarAdminSerializer(serializers.Serializer):
     style = serializers.ChoiceField(choices=Avatar.Style.choices, required=True)
     image = serializers.ImageField(required=True)
 
-from drf_spectacular.utils import extend_schema_field
 
-
-from drf_spectacular.utils import extend_schema_field
-
-
-class AvatarSerializer(serializers.ModelSerializer):
+class AvatarSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     result_image = serializers.SerializerMethodField()
 
     class Meta:
