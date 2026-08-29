@@ -41,7 +41,12 @@ from .serializers import (
     TodayOutfitSerializer,
     TryOnCreateSerializer,
 )
-from .services import get_or_create_today_auto_job, save_try_on_to_cloudinary, submit_try_on_job
+from .services import (
+    get_or_create_today_auto_job,
+    save_try_on_to_cloudinary,
+    submit_try_on_job,
+    sync_outfit_job_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +148,8 @@ class TryOnCreateView(generics.ListCreateAPIView):
 
 class TryOnStatusView(generics.RetrieveAPIView):
     """
-    DB-ONLY status check endpoint for OutfitJob.
-    Does NOT invoke fal_client, requests, or Cloudinary downloads.
+    Status check endpoint for OutfitJob.
+    Actively synchronizes processing jobs with fal.ai if webhooks are delayed/missed.
     """
     permission_classes = [IsAuthenticated]
     serializer_class = OutfitJobStatusSerializer
@@ -157,6 +162,9 @@ class TryOnStatusView(generics.RetrieveAPIView):
             job = self.get_queryset().get(pk=pk)
         except OutfitJob.DoesNotExist:
             raise Http404("Outfit job not found.")
+
+        if job.status == JobStatus.PROCESSING:
+            job = sync_outfit_job_status(job)
 
         result_image_url = None
         if job.status == JobStatus.DONE:
@@ -179,6 +187,8 @@ class TodayOutfitView(generics.RetrieveAPIView):
 
     def get(self, request, *args, **kwargs):
         job = get_or_create_today_auto_job(request.user)
+        if job.status == JobStatus.PROCESSING:
+            job = sync_outfit_job_status(job)
 
         msg = "Today's outfit is ready." if job.status == JobStatus.DONE else "Today's outfit generation started."
         if job.status == JobStatus.FAILED:
