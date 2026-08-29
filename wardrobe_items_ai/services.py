@@ -205,10 +205,109 @@ def submit_analysis_job(analysis: ItemAnalysis) -> ItemAnalysis:
 
 def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     """
-    Deprecated active status polling fallback.
-    Returns analysis directly from database state without performing expensive network calls.
-    Database state transitions are driven 100% asynchronously by fal.ai webhooks.
+    Checks job status with fal.ai and updates DB accordingly.
+    Handles two stages:
+      1. Background removal: if fal_request_id_bg_removal is completed, extracts fal_cdn_url and triggers vision job.
+      2. Vision analysis: if fal_request_id_vision is completed, parses vision output, updates color/description,
+         and marks analysis as DONE (or FAILED on category mismatch).
+    Idempotent: returns immediately if analysis is already DONE, FAILED, or has no request IDs.
     """
+    if analysis.status in (JobStatus.DONE, JobStatus.FAILED):
+        return analysis
+
+    # Stage 1: Background removal polling (if vision request has not been submitted yet)
+    if analysis.fal_request_id_bg_removal and not analysis.fal_request_id_vision:
+        try:
+            status_info = fal_client.status(FAL_BG_REMOVAL_MODEL_ID, analysis.fal_request_id_bg_removal)
+            if isinstance(status_info, fal_client.Completed):
+                if getattr(status_info, "error", None):
+                    raise Exception(f"fal.ai error: {status_info.error}")
+
+                res = fal_client.result(FAL_BG_REMOVAL_MODEL_ID, analysis.fal_request_id_bg_removal)
+                image_url = None
+                if isinstance(res, dict):
+                    if res.get("image") and isinstance(res["image"], dict):
+                        image_url = res["image"].get("url")
+                    elif res.get("image") and isinstance(res["image"], str):
+                        image_url = res["image"]
+                    elif res.get("images") and isinstance(res["images"], list) and len(res["images"]) > 0:
+                        first_img = res["images"][0]
+                        image_url = first_img.get("url") if isinstance(first_img, dict) else first_img
+
+                if not image_url:
+                    raise Exception(f"No image URL found in fal.ai result: {res}")
+
+                analysis.fal_cdn_url = image_url
+                analysis.save(update_fields=["fal_cdn_url", "updated_at"])
+
+                # Submit Stage 2 (Vision) synchronously via async_to_sync
+                from asgiref.sync import async_to_sync
+                async_to_sync(submit_vision_job_async)(analysis)
+                return analysis
+        except Exception as exc:
+            raw_error = str(exc)
+            logger.error("Background removal sync failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
+            analysis.status = JobStatus.FAILED
+            analysis.internal_error_detail = raw_error
+            analysis.error_message = _friendly_error_message(raw_error)
+            analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+            return analysis
+
+    # Stage 2: Vision analysis polling (if vision request has been submitted)
+    if analysis.status == JobStatus.PROCESSING and analysis.fal_request_id_vision:
+        try:
+            status_info = fal_client.status(FAL_VISION_MODEL_ID, analysis.fal_request_id_vision)
+            if isinstance(status_info, fal_client.Completed):
+                if getattr(status_info, "error", None):
+                    raise Exception(f"fal.ai error: {status_info.error}")
+
+                res = fal_client.result(FAL_VISION_MODEL_ID, analysis.fal_request_id_vision)
+                raw_output = ""
+                if isinstance(res, dict):
+                    raw_output = res.get("output") or res.get("text") or res.get("content") or str(res)
+                else:
+                    raw_output = str(res)
+
+                parsed = _parse_json_response(raw_output)
+                category_obj = getattr(analysis.wardrobe_item, "category", None)
+                category_name = getattr(category_obj, "name", "clothing item") if category_obj else "clothing item"
+                detected_item_type = str(parsed.get("detected_item_type", "")).strip()
+
+                matches_category = parsed.get("matches_category", True)
+                if not matches_category:
+                    friendly_msg = f"We couldn't find a clear {category_name} in this photo — please upload a photo showing just the item."
+                    logger.warning(
+                        "Category mismatch during sync for ItemAnalysis %s (detected_item_type='%s'): %s",
+                        analysis.id,
+                        detected_item_type,
+                        friendly_msg,
+                    )
+                    analysis.status = JobStatus.FAILED
+                    analysis.internal_error_detail = (
+                        f"Category mismatch: vision model reported image (detected item: '{detected_item_type or 'unknown'}') "
+                        f"does not match category '{category_name}'."
+                    )
+                    analysis.error_message = friendly_msg
+                    analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+                    return analysis
+
+                analysis.color = str(parsed.get("color", "")).strip()
+                analysis.description = str(parsed.get("description", "")).strip()
+                analysis.status = JobStatus.DONE
+                analysis.is_saved = False
+                analysis.error_message = ""
+                analysis.internal_error_detail = ""
+                analysis.save(
+                    update_fields=["color", "description", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"]
+                )
+        except Exception as exc:
+            raw_error = str(exc)
+            logger.error("Vision sync failed for ItemAnalysis %s: %s", analysis.id, raw_error, exc_info=True)
+            analysis.status = JobStatus.FAILED
+            analysis.internal_error_detail = raw_error
+            analysis.error_message = _friendly_error_message(raw_error)
+            analysis.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
+
     return analysis
 
 

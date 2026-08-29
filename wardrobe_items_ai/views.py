@@ -157,6 +157,8 @@ class ItemAnalysisStatusView(generics.RetrieveAPIView):
         )
         if not analysis:
             raise Http404("Item analysis not found.")
+        if analysis.status == ItemAnalysis.JobStatus.PROCESSING:
+            analysis = sync_analysis_status(analysis)
         _raise_if_analysis_failed(analysis)
         return analysis
 

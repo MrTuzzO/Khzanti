@@ -5,10 +5,24 @@ from wardrobe.serializers import CategorySerializer
 from .models import ItemAnalysis, WardrobeItem
 
 
+class NullableScalarModelSerializerMixin:
+    """
+    Mixin for ModelSerializer classes to normalize empty scalar string
+    values ("") into None (JSON null) in API response representations.
+    Preserves list/collection fields as empty arrays [], dicts as {},
+    booleans, numbers, and non-empty strings.
+    """
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if isinstance(ret, dict):
+            for key, val in list(ret.items()):
+                if val == "":
+                    ret[key] = None
+        return ret
 
 
-
-class WardrobeItemCreateSerializer(serializers.ModelSerializer):
+class WardrobeItemCreateSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(),
         help_text="Category ID (integer)."
@@ -29,7 +43,7 @@ class WardrobeItemCreateSerializer(serializers.ModelSerializer):
 
 
 
-class ItemAnalysisSerializer(serializers.ModelSerializer):
+class ItemAnalysisSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     display_url = serializers.ReadOnlyField()
     processed_image = serializers.SerializerMethodField()
 
@@ -62,7 +76,7 @@ class ItemAnalysisSerializer(serializers.ModelSerializer):
 
 
 
-class WardrobeItemSerializer(serializers.ModelSerializer):
+class WardrobeItemSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     analysis = ItemAnalysisSerializer(read_only=True)
 
