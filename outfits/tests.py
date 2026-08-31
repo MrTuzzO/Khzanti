@@ -11,6 +11,7 @@ from rest_framework.test import APITestCase
 
 from avatars.models import Avatar
 from outfits.models import DailyOutfitSelection, JobStatus, OutfitJob, SavedOutfit, TriggerType
+from outfits.services import build_try_on_prompt
 from wardrobe.models import Category
 from wardrobe_items_ai.models import ItemAnalysis, WardrobeItem
 
@@ -39,6 +40,98 @@ MOCK_CLOUDINARY_RESPONSE = {
     "url": "http://res.cloudinary.com/test/image/upload/v1234567890/test_tryon.png",
     "secure_url": "https://res.cloudinary.com/test/image/upload/v1234567890/test_tryon.png",
 }
+
+
+class TryOnPromptBuilderTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="promptuser@example.com",
+            name="Prompt User",
+            password="password123",
+        )
+        self.avatar_real = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/avatar_real.png",
+        )
+        self.avatar_cartoon = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/avatar_cartoon.png",
+        )
+
+        self.cat_top, _ = Category.objects.get_or_create(name="Tops")
+        self.cat_bottom, _ = Category.objects.get_or_create(name="Bottoms")
+        self.dummy_img = SimpleUploadedFile(
+            name="item.png", content=VALID_PNG_BYTES, content_type="image/png"
+        )
+        self.item_top = WardrobeItem.objects.create(
+            user=self.user, category=self.cat_top, image=self.dummy_img
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=self.item_top,
+            status=ItemAnalysis.JobStatus.DONE,
+            color="navy blue",
+            description="cotton button-down shirt",
+        )
+        self.item_bottom = WardrobeItem.objects.create(
+            user=self.user, category=self.cat_bottom, image=self.dummy_img
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=self.item_bottom,
+            status=ItemAnalysis.JobStatus.DONE,
+            color="beige",
+            description="tailored pleated trousers",
+        )
+
+    def test_realistic_avatar_try_on_prompt_hierarchy_and_rules(self):
+        items = [self.item_top]
+        prompt = build_try_on_prompt(self.avatar_real, items)
+
+        # 1. Authoritative Base Scene / World
+        self.assertIn("IMAGE 1 — AVATAR CONTROLS THE AUTHORITATIVE VISUAL WORLD", prompt)
+        self.assertIn("photorealistic human photograph", prompt)
+        self.assertIn("STRICT PRESERVATION: Do NOT repaint, restyle, regenerate, beautify, or alter the avatar", prompt)
+
+        # 2. Wardrobe References
+        self.assertIn("WARDROBE IMAGES ARE AUTHORITATIVE GARMENT REFERENCES", prompt)
+        self.assertIn("WHAT TO WEAR, NOT HOW TO RENDER", prompt)
+        self.assertIn("RECONSTRUCT, DO NOT COPY DEFECTS", prompt)
+        self.assertIn("STRICT GARMENT FIDELITY (NO SUBSTITUTION)", prompt)
+        self.assertIn("dress ≠ shirt + pants", prompt)
+        self.assertIn("Reference Tops (color: navy blue, description: cotton button-down shirt)", prompt)
+
+        # 3. Natural 3D Garment Reconstruction & Anti-compositing
+        self.assertIn("NATURAL 3D GARMENT RECONSTRUCTION (NO COMPOSITING / NO PASTING)", prompt)
+        self.assertIn("NEVER treat the wardrobe image as a texture, cutout, sticker, pasted layer, or pixel source", prompt)
+
+        # 4. Photorealistic Style Execution
+        self.assertIn("STYLE EXECUTION — PHOTOREALISTIC RENDERING", prompt)
+        self.assertIn("ZERO difference in rendering fidelity between the person's skin and the clothing", prompt)
+
+        # 5. Quality Test
+        self.assertIn("VISUAL COHERENCE & ULTIMATE QUALITY TEST", prompt)
+        self.assertIn("It must NEVER look like someone took a wardrobe product image and photoshopped it onto the person", prompt)
+
+    def test_cartoon_avatar_try_on_prompt(self):
+        items = [self.item_top]
+        prompt = build_try_on_prompt(self.avatar_cartoon, items)
+
+        self.assertIn("IMAGE 1 — AVATAR CONTROLS THE AUTHORITATIVE VISUAL WORLD (cartoon / stylized / illustrated artwork)", prompt)
+        self.assertIn("STYLE EXECUTION — CARTOON / ILLUSTRATED / STYLIZED RENDERING", prompt)
+        self.assertIn("Any photorealistic wardrobe reference photo must be completely stylized and redrawn", prompt)
+        self.assertIn("NEVER place a photorealistic garment or real photographic texture onto a cartoon avatar", prompt)
+
+    def test_multi_garment_try_on_prompt_layering(self):
+        items = [self.item_top, self.item_bottom]
+        prompt = build_try_on_prompt(self.avatar_real, items)
+
+        self.assertIn("Image 2: Reference Tops", prompt)
+        self.assertIn("Image 3: Reference Bottoms", prompt)
+        self.assertIn("MULTI-GARMENT PHYSICAL LAYERING", prompt)
+        self.assertIn("shirts tucked into/under pants or jackets", prompt)
 
 
 @patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
