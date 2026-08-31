@@ -19,43 +19,47 @@ FAL_TRY_ON_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 def build_try_on_prompt(avatar: Avatar, items: list) -> str:
     """
-    Constructs a detailed, instruction-rich prompt for fal-ai/nano-banana-pro/edit.
-    Establishes Image 1 as the PRIMARY Authoritative Base Scene/Subject, followed by secondary wardrobe design references (Image 2, 3, etc.).
+    Constructs an instruction-rich prompt for fal-ai/nano-banana-pro/edit.
+    Enforces a strict division of responsibilities:
+      - Image 1 (Avatar) = Authoritative Final-Image World (controls person, pose, lighting, camera, environment, style).
+      - Wardrobe Images = Authoritative Garment References (determines WHAT garment is worn: category, cut, color, pattern, construction).
+    Directs the model to reconstruct the garments naturally on the avatar rather than compositing or pasting pixels.
     """
     is_realistic = (avatar.style == Avatar.Style.REALISTIC)
     avatar_style_desc = "photorealistic human photograph" if is_realistic else "cartoon / stylized / illustrated artwork"
 
     if is_realistic:
         style_specific_instructions = (
-            "STYLE EXECUTION — PHOTOREALISTIC RENDERING (ONE-CAMERA / ONE-PHOTOGRAPH RULE):\n"
-            "- Render the clothing with the EXACT SAME photographic quality and realism as the avatar in Image 1.\n"
-            "- The garments must exhibit authentic fabric microtexture, realistic material response to light, subtle tonal variations, physically plausible folds, and natural edge softness against the skin.\n"
-            "- The entire image must share the avatar's exact single light source, lighting direction, shadow softness, exposure, white balance, color temperature, contrast, tonal range, depth of field, sharpness, image grain, and lens characteristics.\n"
+            "4. STYLE EXECUTION — PHOTOREALISTIC RENDERING (ONE-CAMERA / ONE-PHOTOGRAPH RULE):\n"
+            "- Render all clothing with the EXACT SAME photographic realism and optical characteristics as the avatar in Image 1.\n"
+            "- The garments must display authentic fabric microtexture, realistic material response to light, subtle tonal variations, physically plausible folds, and natural edge softness against the skin.\n"
+            "- The entire image must share the avatar's exact single light source, lighting direction, shadow softness, exposure, white balance, color temperature, contrast, tonal range, depth of field, sharpness, image grain, and camera lens characteristics.\n"
             "- There must be ZERO difference in rendering fidelity between the person's skin and the clothing.\n"
             "- STRICTLY PROHIBITED: Do NOT make the clothing look cleaner, flatter, sharper, smoother, or more digitally rendered than the person. The clothing must NEVER look like a 3D asset, sticker, cutout, pasted layer, illustration, or digitally painted overlay."
         )
     else:
         style_specific_instructions = (
-            "STYLE EXECUTION — CARTOON / ILLUSTRATED / STYLIZED RENDERING:\n"
+            "4. STYLE EXECUTION — CARTOON / ILLUSTRATED / STYLIZED RENDERING:\n"
             "- Reconstruct all garments in the EXACT SAME visual language and artistic medium as the avatar in Image 1.\n"
             "- Match the avatar's rendering technique, line quality, outline thickness, flat/cel/gradient shading, highlights, color palette treatment, texture abstraction, and level of artistic detail.\n"
-            "- Any photorealistic reference photo must be completely stylized and redrawn to match the avatar's world.\n"
-            "- Never place a photorealistic garment or real photographic texture onto a cartoon avatar."
+            "- Any photorealistic wardrobe reference photo must be completely stylized and redrawn to match the avatar's illustrated world.\n"
+            "- NEVER place a photorealistic garment or real photographic texture onto a cartoon avatar."
         )
 
     prompt_parts = [
         "MANDATORY EXECUTION DIRECTIVE — ONE-SHOT COHESIVE VIRTUAL TRY-ON & GARMENT RECONSTRUCTION:",
         "",
-        f"1. IMAGE 1 — AVATAR IS THE PRIMARY AUTHORITATIVE PHOTOGRAPHIC SOURCE ({avatar_style_desc}):",
-        "- The avatar in Image 1 is the AUTHORITATIVE BASE SCENE that dictates the entire visual world of the final image.",
-        "- STRICTLY PRESERVE: the person's exact identity, facial features, expression, gender, skin appearance, hair, body proportions, anatomy, pose, camera position, camera angle, framing, perspective, background environment, lighting direction, exposure, white balance, contrast, depth, and image characteristics.",
-        "- The final image must look as though THIS EXACT PERSON was originally photographed/rendered wearing the requested outfit.",
-        "- Do NOT repaint, restyle, regenerate, beautify, or reinterpret the avatar. Adapt the clothing to the person — NEVER alter the person to fit the clothing.",
+        f"1. IMAGE 1 — AVATAR CONTROLS THE AUTHORITATIVE VISUAL WORLD ({avatar_style_desc}):",
+        "- The avatar in Image 1 is the AUTHORITATIVE BASE SCENE that dictates the entire visual world of the final output.",
+        "- Avatar controls: person identity, face, facial structure, expression, apparent gender, skin appearance, hair, body proportions, anatomy, pose, camera position, camera angle, framing, perspective, environment, background, lighting, exposure, image quality, and overall rendering style.",
+        "- STRICT PRESERVATION: Do NOT repaint, restyle, regenerate, beautify, or alter the avatar. Adapt the clothing to the person — NEVER alter the person to fit the clothing.",
         "",
-        "2. WARDROBE IMAGES ARE DESIGN SPECIFICATIONS ONLY (NOT A PIXEL SOURCE):",
-        "- The wardrobe images (Image 2, 3, etc.) are DESIGN BLUEPRINTS used ONLY to understand garment identity, NOT photographic layers to paste onto the avatar.",
-        "- EXTRACT ONLY the garment's design identity: category, overall silhouette, cut, color, material appearance, collar/neckline, sleeves, cuffs, buttons, pockets, seams, hems, fabric pattern, print, embroidery, and distinctive design details.",
-        "- STRICTLY DISCARD all source-image photographic defects from wardrobe photos: DO NOT copy their lighting, shadows, highlights, wrinkles, camera perspective, background, low image quality, color grading, noise, distortion, or flat cutout appearance.",
+        "2. WARDROBE IMAGES ARE AUTHORITATIVE GARMENT REFERENCES (WHAT TO WEAR, NOT HOW TO RENDER):",
+        "- The wardrobe images (Image 2, 3, etc.) control ONLY the garment's identity and design specifications:",
+        "  * Garment category, garment identity, silhouette, construction, cut, length, proportions, color, fabric pattern, neckline/collar, sleeves, cuffs, buttons, pockets, seams, and distinctive details.",
+        "- RECONSTRUCT, DO NOT COPY DEFECTS: A blurry, poorly lit, wrinkled, or flat-lay photographed wardrobe reference must become a clean, realistic, physically fitted version of THAT EXACT SAME GARMENT on the avatar.",
+        "- STRICTLY DISCARD all wardrobe image source artifacts: DO NOT copy wardrobe background, lighting, shadows, flat-lay folds/wrinkles, camera perspective, noise, distortion, or cutout edges.",
+        "- STRICT GARMENT FIDELITY (NO SUBSTITUTION): Do NOT redesign or substitute garments (dress ≠ shirt + pants; dress ≠ coat + pants; skirt ≠ trousers; saree ≠ generic dress; hijab ≠ loose hair; long garment ≠ short garment). Preserve the essential identity and construction of the supplied garment.",
     ]
 
     for idx, item in enumerate(items, start=2):
@@ -71,28 +75,29 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         details_str = f" ({', '.join(details)})" if details else ""
         prompt_parts.append(
             f"   - Image {idx}: Reference {category_name}{details_str}. "
-            f"Extract and reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)."
+            f"Extract and faithfully reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)."
         )
 
     prompt_parts.extend([
         "",
-        "3. RECREATE THE GARMENT FROM SCRATCH ON THE AVATAR (NO COMPOSITING / NO PASTING):",
-        "- Newly render each garment from scratch around the avatar's actual 3D body structure.",
-        "- The garment must naturally follow the contours of the chest, shoulders, torso, waist, arms, hips, and legs.",
-        "- Create natural physical fabric behavior: realistic draping, dynamic tension, compression folds, natural wrinkles, fabric thickness, contact shadows, ambient occlusion, and soft edge blending.",
-        "- Multi-garment layering must follow natural physical hierarchy (e.g., shirts tucked into pants, jackets worn over tops, hijabs/headwear draped over head and contouring naturally over the collar/neckline).",
+        "3. NATURAL 3D GARMENT RECONSTRUCTION (NO COMPOSITING / NO PASTING):",
+        "- The model must reconstruct each garment as if it were physically present on the avatar when the avatar image was originally created.",
+        "- The clothing must naturally conform to the avatar's 3D anatomy: shoulders, chest, torso, waist, hips, arms, legs, body curvature, and pose.",
+        "- Obey realistic physical fabric behavior: natural draping, fabric tension, compression folds, gravity, seams, contact shadows, ambient occlusion, and soft edge blending.",
+        "- MULTI-GARMENT PHYSICAL LAYERING: When multiple items are worn, maintain proper physical layering (e.g., shirts tucked into/under pants or jackets, dresses under coats, hijabs draped around head/neck contouring over shoulders and collar, shoes attached naturally to feet).",
+        "- NEVER treat the wardrobe image as a texture, cutout, sticker, pasted layer, or pixel source.",
         "",
-        "4. ONE CAMERA / ONE PHOTOGRAPH INTEGRATION:",
         style_specific_instructions,
         "",
-        "5. VISUAL COHERENCE & QUALITY STANDARD:",
-        "- CRITICAL TEST: The final result must look like ONE SINGLE PROFESSIONAL PHOTOGRAPH created with the person already wearing the outfit. There must be ZERO visual separation or perceived layer boundary between the person and the clothing.",
+        "5. VISUAL COHERENCE & ULTIMATE QUALITY TEST:",
+        "- CRITICAL TEST: A human observer looking at the final image must perceive that the person was naturally photographed or created wearing the supplied outfit.",
+        "- It must NEVER look like someone took a wardrobe product image and photoshopped it onto the person.",
         "- Include ONLY the specified wardrobe items. Do NOT invent unrequested accessories, extra layers, or unselected garments.",
         "",
         "6. PRIORITY HIERARCHY WHEN REFERENCES CONFLICT:",
-        "   1. Avatar's visual style, lighting, camera, anatomy, and scene environment (Authoritative)",
+        "   1. Avatar's visual world: identity, anatomy, pose, lighting, camera, perspective, and background environment (Authoritative)",
         "   2. Natural physical integration and fabric draping on the avatar's body",
-        "   3. Garment design identity from the wardrobe reference",
+        "   3. Garment design identity from the wardrobe reference (category, silhouette, color, pattern, cut)",
         "   4. Minor decorative details from the wardrobe reference",
         "",
         f"FINAL OUTPUT: A single, seamlessly unified masterwork where the {avatar_style_desc} appears naturally and authentically dressed in the requested wardrobe outfit."

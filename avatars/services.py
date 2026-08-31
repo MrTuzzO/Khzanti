@@ -69,44 +69,18 @@ def resolve_user_default_avatar(user, requested_style=None):
     return system_default
 
 
-DEFAULT_CLOTHING_PROMPTS = {
-    "male": (
-        "Default Clothing:\n"
-        "Formal professional male attire consisting of a formal shirt, a black formal suit, "
-        "professional tailored trousers, and a clean, polished appearance. "
-        "Avoid casual T-shirts, shorts, overly fashionable clothing, or distracting patterns."
-    ),
-    "female": (
-        "Default Clothing:\n"
-        "Modest, elegant professional female attire suitable for a Saudi/Arabian corporate environment: "
-        "a long, loose-fitting formal dress or abaya-style professional outfit with full-length sleeves, "
-        "a high covered neckline, full-length coverage, and a loose, non-body-hugging silhouette. "
-        "Styling in neutral or dark professional colors such as black, navy, charcoal, beige, or dark brown with minimal accessories. "
-        "Do NOT generate tight-fitting trousersuits, body-hugging dresses, short skirts, low necklines, exposed arms/shoulders, "
-        "sheer fabrics, or revealing silhouettes. Do NOT automatically add a headscarf or hijab unless present in Image 1 or profile."
-    ),
-    "default": (
-        "Default Clothing:\n"
-        "Modest, elegant formal professional attire with full coverage, loose non-body-hugging fit, and clean, polished styling."
-    ),
-}
-
 AVATAR_STYLE_PROMPTS = {
     Avatar.Style.REALISTIC: (
-        "Identity & Facial Characteristics:\n"
-        "Keep the exact same facial features as Image 1 — same eyes, nose shape, "
-        "jawline, skin tone, and hairstyle.\n\n"
-        "Visual Style:\n"
-        "Semi-realistic 3D rendered character style, full-body, standing, front-facing, "
-        "arms relaxed, with soft studio lighting against a plain light gray background."
+        "5. VISUAL STYLE & QUALITY STANDARD (Premium Realistic Digital Human Avatar):\n"
+        "- Render as a premium realistic digital human avatar: human, believable, and anatomically precise, with realistic skin texture, subtle microdetail, realistic eyes, hair, hands, fabric drape, and natural studio lighting.\n"
+        "- The result must retain the polished, cohesive look of an intentionally created digital avatar — NOT an unprocessed raw camera photograph, raw smartphone picture, or documentary photo.\n"
+        "- Avoid uncanny plastic/CGI rendering as well as raw photographic camera artifacts. Target: authentic human appearance + polished digital-avatar rendering."
     ),
     Avatar.Style.CARTOON: (
-        "Identity & Facial Characteristics:\n"
-        "Preserve the person's identity and recognizable facial characteristics from Image 1 — "
-        "same hairstyle, skin tone, eyes, nose, and distinct facial features.\n\n"
-        "Visual Style:\n"
-        "Polished 3D cartoon character style, full-body, standing, front-facing, "
-        "arms relaxed, with soft studio lighting against a plain light gray background."
+        "5. VISUAL STYLE & QUALITY STANDARD (Polished 3D Cartoon / Stylized Character Avatar):\n"
+        "- Render as a polished 3D cartoon / stylized digital character avatar.\n"
+        "- Consistent artistic visual language: clean silhouettes, smooth stylized shading, cohesive lighting, charming stylized proportions, and polished facial/hair/clothing rendering.\n"
+        "- Coherent stylized artwork: Must look intentionally rendered as ONE complete illustrated piece, with no photorealistic or mismatched textures."
     ),
 }
 
@@ -115,50 +89,43 @@ FAL_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
     """
-    Constructs a structured fal.ai prompt that clearly separates:
-    1. Identity / Physical Characteristics (Image 1 reference)
-    2. Body / Proportions (visible height, build, weight distribution + profile attributes)
-    3. Appearance (skin tone, hair characteristics)
-    4. Default Clothing (gender-specific formal/modest attire)
-    5. Visual Style (semi-realistic or 3D cartoon)
+    Constructs a structured fal.ai prompt that treats Image 1 as a reference to
+    extract identity and clothing from, rather than a composition/crop to copy.
+    Always generates a complete, standardized full-body avatar (head-to-toe).
     """
     profile_constraints = profile_constraints or {}
     gender_raw = str(profile_constraints.get("gender") or "").strip().lower()
 
+    # 1. Primary Identity & Person Reference Directive (Reference vs Composition)
+    identity_lines = [
+        "1. PRIMARY IDENTITY & REFERENCE DIRECTIVE (Image 1 is a Reference, NOT a Composition Template):",
+        "- Treat Image 1 as a reference to understand the person's physical characteristics, NOT as a photographic composition to copy.",
+        "- Do NOT reproduce the original image's camera framing, crop, background, photographic artifacts, or raw photo appearance.",
+        "- Extract and faithfully preserve the person's recognizable features: facial structure, face shape, eyes, nose, mouth, jawline, skin tone, hair color, hair texture, hairstyle, approximate age, and likeness.",
+    ]
+
+    # Gender handling: explicit user profile constraint if provided, else visual inference from person
     if gender_raw in ("male", "man", "boy", "m"):
-        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["male"]
+        identity_lines.append("- Gender Constraint: The subject is MALE. Maintain consistent male gender presentation.")
     elif gender_raw in ("female", "woman", "girl", "f"):
-        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["female"]
+        identity_lines.append("- Gender Constraint: The subject is FEMALE. Maintain consistent female gender presentation.")
     else:
-        clothing_prompt = DEFAULT_CLOTHING_PROMPTS["default"]
-
-    if style == Avatar.Style.CARTOON:
-        identity_prompt = (
-            "Identity & Physical Characteristics:\n"
-            "Preserve the person's identity and recognizable facial characteristics from Image 1 — "
-            "same eyes, nose, jawline, skin tone, hairstyle, and distinct facial features."
-        )
-        style_prompt = (
-            "Visual Style:\n"
-            "Polished 3D cartoon character style, full-body, standing, front-facing, "
-            "arms relaxed, with soft studio lighting against a plain light gray background."
-        )
-    else:
-        identity_prompt = (
-            "Identity & Physical Characteristics:\n"
-            "Keep the exact same facial features as Image 1 — same eyes, nose shape, "
-            "jawline, skin tone, hairstyle, and facial proportions."
-        )
-        style_prompt = (
-            "Visual Style:\n"
-            "Semi-realistic 3D rendered character style, full-body, standing, front-facing, "
-            "arms relaxed, with soft studio lighting against a plain light gray background."
+        identity_lines.append(
+            "- Gender Inference: Apparent gender presentation must be directly inferred from the actual person in Image 1. "
+            "Do NOT randomly switch or alter male/female presentation. Infer gender from the person's physical features, not solely from clothing."
         )
 
+    identity_prompt = "\n".join(identity_lines)
+
+    # 2. Mandatory Full-Body Avatar Composition & Framing
     body_lines = [
-        "Body & Proportions:\n"
-        "Treat Image 1 as the primary visual source for body characteristics, accurately "
-        "preserving visible height, body build, weight distribution, overall body shape, and proportions."
+        "2. MANDATORY FULL-BODY AVATAR COMPOSITION (Head-to-Toe Framing):",
+        "- MANDATORY FULL-BODY REQUIREMENT: Regardless of whether Image 1 is a face-only close-up, headshot, chest-up portrait, half-body photo, or full-body photo, the output MUST ALWAYS be a complete, head-to-toe full-body avatar.",
+        "- The source image crop must NEVER determine the final avatar crop. Do NOT generate portrait-only, chest-up, waist-up, or cropped-leg compositions.",
+        "- Construct the complete human body naturally: full head, neck, shoulders, torso, arms, hands, waist, hips, both legs, and feet visible in frame.",
+        "- Composition: Clean, centered, full-body character presentation with ample surrounding space against a plain, neutral light gray studio background.",
+        "- Pose: Standing naturally in a relaxed, balanced, anatomically natural pose suitable for virtual try-on and wardrobe dressing.",
+        "- Accurately preserve visible height, body build, weight distribution, and proportions from Image 1.",
     ]
 
     profile_lines = []
@@ -180,15 +147,23 @@ def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
 
     body_prompt = "\n".join(body_lines)
 
-    appearance_prompt = (
-        "Appearance:\n"
-        "Retain exact skin tone, hair characteristics, hair color, texture, and all clearly visible physical characteristics from Image 1."
+    # 3. Authoritative Source Clothing Reconstruction & Partial/Cropped Fallback Hierarchy
+    clothing_prompt = (
+        "3. AUTHORITATIVE CLOTHING RECONSTRUCTION & PARTIAL-IMAGE FALLBACK HIERARCHY:\n"
+        "- PRIORITY 1 (COMPLETE SOURCE CLOTHING): If Image 1 clearly shows complete clothing, faithfully reconstruct that exact outfit (category, silhouette, cut, length, sleeves, collar/neckline, construction, colors, fabric patterns, layering, and headwear such as hijab/abaya/turban if present). Reconstruct the garment naturally rather than pasting pixels.\n"
+        "- PRIORITY 2 (PARTIAL SOURCE CLOTHING): If Image 1 shows partial clothing with enough information to identify the garment, preserve what is visible and naturally complete it.\n"
+        "- PRIORITY 3 (FALLBACK FOR CROPPED / FACE-ONLY / HALF-BODY SOURCE IMAGES):\n"
+        "  * MALE FALLBACK: When the source does not provide enough clothing information to determine the full outfit, it is acceptable to generate a clean, polished coat/jacket with tailored trousers/pants as neutral male avatar attire.\n"
+        "  * FEMALE FALLBACK: Do NOT generate a generic coat + pants suit, random Western suit, or abaya (unless the source actually indicates an abaya). When the lower clothing cannot be determined from a face/upper-body/half-body image, generate a modest, elegant, full-length kaftan or loose round long dress that extends naturally to full length (head-to-toe). The dress MUST use the same dominant/visible color or closely matching color family from the source image's clothing/palette (e.g., visible purple/lavender upper garment -> purple/lavender long kaftan/dress; visible blue -> blue long kaftan/dress; visible beige/tan -> beige/tan long kaftan/dress; visible pink -> pink long kaftan/dress). Maintain a simple, polished, loose non-body-hugging silhouette.\n"
+        "- Clearly visible source clothing ALWAYS takes strict precedence over fallback templates."
     )
+
+    # 4. Visual Style & Quality Standard
+    style_prompt = AVATAR_STYLE_PROMPTS.get(style, AVATAR_STYLE_PROMPTS[Avatar.Style.REALISTIC])
 
     sections = [
         identity_prompt,
         body_prompt,
-        appearance_prompt,
         clothing_prompt,
         style_prompt,
     ]

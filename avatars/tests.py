@@ -46,25 +46,76 @@ class AvatarPromptAndPipelineTestCase(APITestCase):
             content_type="image/png",
         )
 
-    def test_male_profile_generates_black_formal_suit_clothing(self, mock_cloud):
+    def test_male_profile_generates_gender_constraint_and_source_clothing_reconstruction(self, mock_cloud):
         profile_constraints = {"gender": "male"}
         prompt = build_avatar_prompt(Avatar.Style.REALISTIC, profile_constraints)
 
-        self.assertIn("black formal suit", prompt)
-        self.assertIn("formal shirt", prompt)
-        self.assertIn("professional tailored trousers", prompt)
-        self.assertIn("Avoid casual T-shirts", prompt)
+        self.assertIn("Gender Constraint: The subject is MALE", prompt)
+        self.assertIn("AUTHORITATIVE CLOTHING RECONSTRUCTION & PARTIAL-IMAGE FALLBACK HIERARCHY", prompt)
+        self.assertIn("PRIORITY 1 (COMPLETE SOURCE CLOTHING)", prompt)
+        self.assertIn("MALE FALLBACK: When the source does not provide enough clothing information", prompt)
+        self.assertIn("coat/jacket with tailored trousers/pants", prompt)
 
-    def test_female_profile_generates_modest_nontight_clothing(self, mock_cloud):
+    def test_female_profile_generates_gender_constraint_and_source_clothing_reconstruction(self, mock_cloud):
         profile_constraints = {"gender": "female"}
         prompt = build_avatar_prompt(Avatar.Style.REALISTIC, profile_constraints)
 
-        self.assertIn("Saudi/Arabian corporate environment", prompt)
-        self.assertIn("long, loose-fitting formal dress or abaya-style", prompt)
-        self.assertIn("full-length sleeves", prompt)
-        self.assertIn("high covered neckline", prompt)
-        self.assertIn("loose, non-body-hugging silhouette", prompt)
-        self.assertIn("Do NOT automatically add a headscarf or hijab", prompt)
+        self.assertIn("Gender Constraint: The subject is FEMALE", prompt)
+        self.assertIn("AUTHORITATIVE CLOTHING RECONSTRUCTION & PARTIAL-IMAGE FALLBACK HIERARCHY", prompt)
+        self.assertIn("FEMALE FALLBACK: Do NOT generate a generic coat + pants suit", prompt)
+        self.assertIn("modest, elegant, full-length kaftan or loose round long dress", prompt)
+        self.assertIn("dominant/visible color or closely matching color family from the source image", prompt)
+
+    def test_partial_source_clothing_fallbacks_and_color_matching(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+
+        # 1. Partial male source -> fallback coat + trousers allowed
+        self.assertIn("MALE FALLBACK: When the source does not provide enough clothing information to determine the full outfit, it is acceptable to generate a clean, polished coat/jacket with tailored trousers/pants", prompt)
+
+        # 2. Partial female source -> fallback is long kaftan / loose round long dress
+        self.assertIn("FEMALE FALLBACK: Do NOT generate a generic coat + pants suit, random Western suit, or abaya (unless the source actually indicates an abaya)", prompt)
+        self.assertIn("generate a modest, elegant, full-length kaftan or loose round long dress that extends naturally to full length (head-to-toe)", prompt)
+
+        # 3. Female fallback references visible source color / color family
+        self.assertIn("purple/lavender upper garment -> purple/lavender long kaftan/dress", prompt)
+        self.assertIn("blue -> blue long kaftan/dress", prompt)
+        self.assertIn("beige/tan -> beige/tan long kaftan/dress", prompt)
+
+        # 4. Clearly visible clothing still takes priority over fallback clothing
+        self.assertIn("Clearly visible source clothing ALWAYS takes strict precedence over fallback templates", prompt)
+
+    def test_mandatory_full_body_and_crop_independence(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+
+        # 1. Reference not composition
+        self.assertIn("PRIMARY IDENTITY & REFERENCE DIRECTIVE (Image 1 is a Reference, NOT a Composition Template)", prompt)
+        self.assertIn("Do NOT reproduce the original image's camera framing, crop, background, photographic artifacts", prompt)
+
+        # 2. Mandatory full-body head-to-toe
+        self.assertIn("MANDATORY FULL-BODY AVATAR COMPOSITION (Head-to-Toe Framing)", prompt)
+        self.assertIn("MANDATORY FULL-BODY REQUIREMENT", prompt)
+        self.assertIn("The source image crop must NEVER determine the final avatar crop", prompt)
+        self.assertIn("full head, neck, shoulders, torso, arms, hands, waist, hips, both legs, and feet visible in frame", prompt)
+
+        # 3. Fallback for cropped / face-only / half-body
+        self.assertIn("PRIORITY 3 (FALLBACK FOR CROPPED / FACE-ONLY / HALF-BODY SOURCE IMAGES)", prompt)
+
+    def test_unspecified_gender_infers_from_person_reference(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+        self.assertIn("Gender Inference: Apparent gender presentation must be directly inferred from the actual person in Image 1", prompt)
+        self.assertIn("Infer gender from the person's physical features, not solely from clothing", prompt)
+
+    def test_realistic_style_generates_premium_digital_human_avatar_prompt(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {"gender": "male"})
+        self.assertIn("Premium Realistic Digital Human Avatar", prompt)
+        self.assertIn("Render as a premium realistic digital human avatar", prompt)
+        self.assertIn("NOT an unprocessed raw camera photograph", prompt)
+        self.assertIn("Target: authentic human appearance + polished digital-avatar rendering", prompt)
+
+    def test_cartoon_style_generates_stylized_art_prompt(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.CARTOON, {"gender": "female"})
+        self.assertIn("Polished 3D Cartoon / Stylized Character Avatar", prompt)
+        self.assertIn("Consistent artistic visual language", prompt)
 
     def test_profile_information_incorporated_into_prompt(self, mock_cloud):
         profile_constraints = {
@@ -112,11 +163,11 @@ class AvatarPromptAndPipelineTestCase(APITestCase):
             self.assertEqual(len(arguments["image_urls"]), 1)
 
             prompt = arguments.get("prompt", "")
-            self.assertIn("Identity & Physical Characteristics", prompt)
-            self.assertIn("Body & Proportions", prompt)
-            self.assertIn("Appearance", prompt)
-            self.assertIn("Default Clothing", prompt)
-            self.assertIn("black formal suit", prompt)
+            self.assertIn("PRIMARY IDENTITY & REFERENCE DIRECTIVE", prompt)
+            self.assertIn("MANDATORY FULL-BODY AVATAR COMPOSITION", prompt)
+            self.assertIn("AUTHORITATIVE CLOTHING RECONSTRUCTION", prompt)
+            self.assertIn("VISUAL STYLE & QUALITY STANDARD", prompt)
+            self.assertIn("Gender Constraint: The subject is MALE", prompt)
 
         avatar.refresh_from_db()
         self.assertEqual(avatar.status, Avatar.JobStatus.PROCESSING)
