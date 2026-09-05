@@ -6,8 +6,13 @@ from django.http import JsonResponse
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from core.ckeditor_uploads import upload_file as ckeditor_upload_file
 
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('healthz/', health_check, name='health-check'),
     path('ckeditor5/image_upload/', ckeditor_upload_file, name='ck_editor_5_upload_file'),
     path('api/v1/auth/', include('accounts.urls')),
     path('api/v1/', include('core.urls')),

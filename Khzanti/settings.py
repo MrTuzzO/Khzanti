@@ -56,6 +56,7 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'core.middleware.ApiExceptionMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -153,7 +154,7 @@ STORAGES = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 
@@ -172,8 +173,12 @@ if "test" in sys.argv:
     except Exception:
         pass
 
-CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS').split(',')
-CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+CORS_ALLOWED_ORIGINS = [
+    origin for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if origin
+]
+CSRF_TRUSTED_ORIGINS = [
+    origin for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if origin
+]
 
 from datetime import timedelta
 
