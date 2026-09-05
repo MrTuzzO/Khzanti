@@ -726,7 +726,7 @@ def generate_outfit_reasoning(user, items: list, scheduled_date=None) -> dict:
     try:
         client = OpenAI(api_key=api_key)
         system_prompt = (
-            "You are an expert AI fashion stylist for Fashion Hub AI (Hdoomi).\n"
+            "You are an expert AI fashion stylist for Fashion Hub AI (Khzanti).\n"
             "Your goal is to provide concise, elegant, and insightful reasoning explaining why the provided outfit combination works well for the user.\n\n"
             "STRICT RULES:\n"
             "1. Base your reasoning on the actual items in the outfit and user profile.\n"
@@ -957,7 +957,7 @@ def select_auto_outfit_combination(user, scheduled_date):
         logger.info("[AUTO OUTFIT] OpenAI selection started using model '%s' for gender=%s...", model_name, gender)
         client = OpenAI(api_key=api_key)
         system_prompt = (
-            "You are an expert AI fashion stylist for Fashion Hub AI (Hdoomi).\n"
+            "You are an expert AI fashion stylist for Fashion Hub AI (Khzanti).\n"
             "Your goal is to select the optimal wardrobe combination for today's daily AUTO outfit for the user.\n\n"
             "STRICT SELECTION & COMPOSITION RULES:\n"
             "1. Select item IDs ONLY from the provided candidate list. Never invent or hallucinate item IDs.\n"

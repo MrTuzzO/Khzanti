@@ -66,7 +66,7 @@ MIDDLEWARE = [
 
 AUTH_USER_MODEL = 'accounts.User'
 
-ROOT_URLCONF = 'Hdoomi.urls'
+ROOT_URLCONF = 'Khzanti.urls'
 
 TEMPLATES = [
     {
@@ -83,7 +83,7 @@ TEMPLATES = [
     },
 ]
 
-ASGI_APPLICATION = 'Hdoomi.asgi.application'
+ASGI_APPLICATION = 'Khzanti.asgi.application'
 
 
 # Database
@@ -137,6 +137,7 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 SITE_LOGO_URL = f"/{STATIC_URL}img/Logo.png"
+SITE_LOGO_DARK_URL = f"/{STATIC_URL}img/Logo_dark.png"
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -211,7 +212,7 @@ PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 10
 
 # Email
 
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@hdoomi.com")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@khzanti.com")
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",
     "django.core.mail.backends.smtp.EmailBackend"
@@ -320,9 +321,12 @@ def _perm(codename):
 
 
 UNFOLD = {
-    "SITE_TITLE": "Hdoom-i Admin",
-    "SITE_HEADER": "Hdoom-i",
-    "SITE_LOGO": SITE_LOGO_URL,
+    "SITE_TITLE": "Khzanti Admin",
+    "SITE_HEADER": "Khzanti",
+    "SITE_LOGO": {
+        "light": SITE_LOGO_URL,
+        "dark": SITE_LOGO_DARK_URL,
+    },
     "SITE_SYMBOL": "shield_person",
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": True,
@@ -330,17 +334,18 @@ UNFOLD = {
     "DASHBOARD_CALLBACK": "accounts.dashboard.dashboard_callback",
     "COLORS": {
         "primary": {
-            "50": "oklch(97.7% 0.004 155.276)",
-            "100": "oklch(94.6% 0.010 155.276)",
-            "200": "oklch(90.2% 0.019 155.276)",
-            "300": "oklch(82.7% 0.036 155.276)",
-            "400": "oklch(71.4% 0.062 155.276)",
-            "500": "oklch(62.7% 0.081 155.276)",
-            "600": "oklch(55.8% 0.088 155.276)",
-            "700": "oklch(49.6% 0.081 155.276)",
-            "800": "oklch(43.8% 0.067 155.276)",
-            "900": "oklch(38.1% 0.054 155.276)",
-            "950": "oklch(29.1% 0.046 155.276)",
+            # Ramp built around brand primary #A37E2C
+            "50": "oklch(95.6% 0.005 83.692)",
+            "100": "oklch(92.6% 0.013 83.692)",
+            "200": "oklch(88.3% 0.025 83.692)",
+            "300": "oklch(81.0% 0.048 83.692)",
+            "400": "oklch(69.9% 0.082 83.692)",
+            "500": "oklch(61.4% 0.108 83.692)",
+            "600": "oklch(54.6% 0.117 83.692)",
+            "700": "oklch(48.6% 0.108 83.692)",
+            "800": "oklch(42.9% 0.089 83.692)",
+            "900": "oklch(37.3% 0.072 83.692)",
+            "950": "oklch(28.5% 0.061 83.692)",
         },
     },
     "SIDEBAR": {
@@ -382,22 +387,22 @@ UNFOLD = {
                         "link": reverse_lazy("admin:accounts_aesthetic_changelist"),
                         "permission": _perm("accounts.view_aesthetic"),
                     },
-                    {
-                        "title": _("OTP Codes"),
-                        "icon": "pin",
-                        "link": reverse_lazy("admin:accounts_otp_changelist"),
-                        "permission": _perm("accounts.view_otp"),
-                    },
-                    {
-                        "title": _("Password Reset Tokens"),
-                        "icon": "key",
-                        "link": reverse_lazy(
-                            "admin:accounts_passwordresettoken_changelist"
-                        ),
-                        "permission": _perm(
-                            "accounts.view_passwordresettoken"
-                        ),
-                    },
+                    # {
+                    #     "title": _("OTP Codes"),
+                    #     "icon": "pin",
+                    #     "link": reverse_lazy("admin:accounts_otp_changelist"),
+                    #     "permission": _perm("accounts.view_otp"),
+                    # },
+                    # {
+                    #     "title": _("Password Reset Tokens"),
+                    #     "icon": "key",
+                    #     "link": reverse_lazy(
+                    #         "admin:accounts_passwordresettoken_changelist"
+                    #     ),
+                    #     "permission": _perm(
+                    #         "accounts.view_passwordresettoken"
+                    #     ),
+                    # },
                 ],
             },
             {

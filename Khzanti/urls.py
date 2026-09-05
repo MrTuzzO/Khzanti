@@ -59,5 +59,5 @@ def api_handler500(request):
     return server_error(request)
 
 
-handler404 = "Hdoomi.urls.api_handler404"
-handler500 = "Hdoomi.urls.api_handler500"
+handler404 = "Khzanti.urls.api_handler404"
+handler500 = "Khzanti.urls.api_handler500"
