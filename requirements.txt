@@ -21,6 +21,7 @@ djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.30.0
 fal_client==1.0.0
+gunicorn==23.0.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -55,3 +56,4 @@ tzdata==2026.3
 uritemplate==4.2.0
 urllib3==2.7.0
 websockets==17.0.1
+whitenoise==6.11.0

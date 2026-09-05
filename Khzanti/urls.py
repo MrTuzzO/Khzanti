@@ -6,8 +6,13 @@ from django.http import JsonResponse
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from core.ckeditor_uploads import upload_file as ckeditor_upload_file
 
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('healthz/', health_check, name='health-check'),
     path('ckeditor5/image_upload/', ckeditor_upload_file, name='ck_editor_5_upload_file'),
     path('api/v1/auth/', include('accounts.urls')),
     path('api/v1/', include('core.urls')),
@@ -18,6 +23,7 @@ urlpatterns = [
     path('api/v1/outfits/', include('outfits.urls')),
     path('api/v1/model3d/', include('model3d.urls')),
     path('api/v1/social/', include('social.urls')),
+    path('api/v1/feed/', include('feed.urls')),
     path('api/v1/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/v1/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]
@@ -58,5 +64,5 @@ def api_handler500(request):
     return server_error(request)
 
 
-handler404 = "Hdoomi.urls.api_handler404"
-handler500 = "Hdoomi.urls.api_handler500"
+handler404 = "Khzanti.urls.api_handler404"
+handler500 = "Khzanti.urls.api_handler500"
