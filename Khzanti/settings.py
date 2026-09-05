@@ -290,8 +290,8 @@ CKEDITOR_5_FILE_UPLOAD_PERMISSION = "staff"
 
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Hdoom-i API",
-    "DESCRIPTION": "API documentation for Hdoom-i",
+    "TITLE": "Khzanti API",
+    "DESCRIPTION": "API documentation for Khzanti",
     "VERSION": "1.0.0",
 
     "CONTACT": {
