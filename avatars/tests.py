@@ -509,3 +509,110 @@ class AvatarAPIEndpointsTestCase(APITestCase):
         )
         response_other = self.client.post(f"/api/v1/avatars/{other_avatar.id}/save/")
         self.assertEqual(response_other.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class SystemDefaultAvatarVerificationTestCase(APITestCase):
+    def setUp(self):
+        from accounts.models import CustomerProfile
+        self.male_user = User.objects.create_user(
+            email="male_default_test@example.com",
+            name="Male Test User",
+            password="password123",
+        )
+        p_male, _ = CustomerProfile.objects.get_or_create(user=self.male_user)
+        p_male.gender = "male"
+        p_male.save()
+
+        self.female_user = User.objects.create_user(
+            email="female_default_test@example.com",
+            name="Female Test User",
+            password="password123",
+        )
+        p_female, _ = CustomerProfile.objects.get_or_create(user=self.female_user)
+        p_female.gender = "female"
+        p_female.save()
+
+    def test_default_avatar_fallback_creates_verified_cloudinary_path(self, mock_cloud):
+        from avatars.services import resolve_user_default_avatar
+        # When no default avatar exists in database
+        Avatar.objects.filter(is_default=True).delete()
+
+        av_cartoon = resolve_user_default_avatar(self.male_user, requested_style=Avatar.Style.CARTOON)
+        self.assertNotEqual(av_cartoon.result_image.name, "avatars/result/default_avatar.png")
+        self.assertEqual(
+            av_cartoon.result_image.name,
+            "media/avatars/result/system_default_male_cartoon_ecftdo",
+        )
+
+        av_female_real = resolve_user_default_avatar(self.female_user, requested_style=Avatar.Style.REALISTIC)
+        self.assertEqual(
+            av_female_real.result_image.name,
+            "media/avatars/result/system_default_female_realistic_wfq4cl",
+        )
+
+    def test_stale_default_avatar_heals_automatically(self, mock_cloud):
+        from avatars.services import resolve_user_default_avatar
+        Avatar.objects.filter(is_default=True).delete()
+
+        # Simulate legacy stale record with default_avatar.png
+        stale = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender="female",
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+            result_image="avatars/result/default_avatar.png",
+        )
+
+        healed = resolve_user_default_avatar(self.female_user, requested_style=Avatar.Style.CARTOON)
+        self.assertEqual(healed.id, stale.id)
+        self.assertEqual(
+            healed.result_image.name,
+            "media/avatars/result/system_default_female_cartoon_uh7xk3",
+        )
+        stale.refresh_from_db()
+        self.assertEqual(
+            stale.result_image.name,
+            "media/avatars/result/system_default_female_cartoon_uh7xk3",
+        )
+
+    def test_default_endpoint_returns_200_and_valid_cloudinary_url(self, mock_cloud):
+        from avatars.services import resolve_user_default_avatar
+        Avatar.objects.filter(is_default=True).delete()
+
+        self.client.force_authenticate(user=self.female_user)
+        response = self.client.get("/api/v1/avatars/default/?style=cartoon")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["is_default"])
+        self.assertEqual(response.data["style"], "cartoon")
+        self.assertEqual(response.data["gender"], "female")
+        self.assertIn("system_default_female_cartoon_uh7xk3", response.data["result_image"])
+
+    def test_sync_default_avatars_management_command(self, mock_cloud):
+        from django.core.management import call_command
+        import io
+
+        out = io.StringIO()
+        call_command("sync_default_avatars", "--dry-run", stdout=out)
+        output_str = out.getvalue()
+        self.assertIn("=== Default Avatar Cloudinary & Database Audit ===", output_str)
+        self.assertIn("DRY-RUN", output_str)
+
+        out_run = io.StringIO()
+        with patch("requests.get") as mock_req:
+            mock_req.return_value.status_code = 200
+            call_command("sync_default_avatars", stdout=out_run)
+
+        # Verify all 4 system defaults exist in DB with expected public IDs
+        for gender, style, expected_id in [
+            ("male", Avatar.Style.REALISTIC, "media/avatars/result/system_default_male_realistic_zo4mva"),
+            ("male", Avatar.Style.CARTOON, "media/avatars/result/system_default_male_cartoon_ecftdo"),
+            ("female", Avatar.Style.REALISTIC, "media/avatars/result/system_default_female_realistic_wfq4cl"),
+            ("female", Avatar.Style.CARTOON, "media/avatars/result/system_default_female_cartoon_uh7xk3"),
+        ]:
+            rec = Avatar.objects.filter(is_default=True, gender=gender, style=style).first()
+            self.assertIsNotNone(rec, f"Missing default avatar for {gender} {style}")
+            self.assertEqual(rec.result_image.name, expected_id)
+
