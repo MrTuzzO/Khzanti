@@ -121,8 +121,8 @@ async def submit_bg_removal_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
         await analysis.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
         return analysis
 
-    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
-    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/bg-removal/"
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").strip().rstrip("/")
+    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/bg-removal/" if (base_url and base_url.startswith(("http://", "https://"))) else None
 
     try:
         handle = await sync_to_async(fal_client.submit)(
@@ -169,8 +169,8 @@ async def submit_vision_job_async(analysis: ItemAnalysis) -> ItemAnalysis:
     )
 
 
-    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
-    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/vision/"
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").strip().rstrip("/")
+    webhook_url = f"{base_url}/api/v1/wardrobe-items-ai/webhook/vision/" if (base_url and base_url.startswith(("http://", "https://"))) else None
 
     try:
         handle = await sync_to_async(fal_client.submit)(
