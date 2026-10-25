@@ -9,6 +9,14 @@ from .models import Avatar
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_SYSTEM_AVATAR_IMAGE_PATHS = {
+    ("male", Avatar.Style.REALISTIC): "media/avatars/result/system_default_male_realistic_zo4mva",
+    ("male", Avatar.Style.CARTOON): "media/avatars/result/system_default_male_cartoon_ecftdo",
+    ("female", Avatar.Style.REALISTIC): "media/avatars/result/system_default_female_realistic_wfq4cl",
+    ("female", Avatar.Style.CARTOON): "media/avatars/result/system_default_female_cartoon_uh7xk3",
+}
+
+
 def resolve_user_default_avatar(user, requested_style=None):
     """
     Unified style-strict default avatar resolver:
@@ -52,8 +60,10 @@ def resolve_user_default_avatar(user, requested_style=None):
     if not system_default:
         system_default = Avatar.objects.filter(is_default=True, style=requested_style).first()
 
-    if not system_default:
-        system_default = Avatar.objects.filter(is_default=True).first()
+    fallback_img = DEFAULT_SYSTEM_AVATAR_IMAGE_PATHS.get(
+        (user_gender, requested_style),
+        "media/avatars/result/system_default_male_realistic_zo4mva",
+    )
 
     if not system_default:
         system_default = Avatar.objects.create(
@@ -63,8 +73,11 @@ def resolve_user_default_avatar(user, requested_style=None):
             style=requested_style,
             status=Avatar.JobStatus.DONE,
             is_saved=True,
-            result_image="avatars/result/default_avatar.png",
+            result_image=fallback_img,
         )
+    elif not system_default.result_image or "default_avatar.png" in system_default.result_image.name:
+        system_default.result_image = fallback_img
+        system_default.save(update_fields=["result_image", "updated_at"])
 
     return system_default
 
