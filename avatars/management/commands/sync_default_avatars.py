@@ -57,6 +57,12 @@ class Command(BaseCommand):
             help="Inspect status and display proposed changes without uploading assets or updating the database.",
         )
         parser.add_argument(
+            "--overwrite",
+            action="store_true",
+            default=False,
+            help="Re-upload and overwrite existing Cloudinary assets with local files.",
+        )
+        parser.add_argument(
             "--verify-urls",
             action="store_true",
             default=True,
@@ -65,6 +71,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         dry_run = options.get("dry_run", False)
+        overwrite = options.get("overwrite", False)
         verify_urls = options.get("verify_urls", True)
 
         cloud_name = getattr(settings, "CLOUDINARY_STORAGE", {}).get("CLOUD_NAME") or os.getenv("CLOUDINARY_CLOUD_NAME")
@@ -105,22 +112,25 @@ class Command(BaseCommand):
                         self.style.ERROR(f"  [ERROR] {desc} check failed: {err_str}")
                     )
 
-            if not exists_in_cloud:
+            if not exists_in_cloud or overwrite:
                 if not os.path.exists(local_abs_path):
                     self.stdout.write(
                         self.style.ERROR(f"    Local file not found: {local_abs_path}. Cannot upload.")
                     )
                 elif dry_run:
+                    action_verb = "overwrite" if exists_in_cloud else "upload"
                     self.stdout.write(
-                        f"    [DRY-RUN] Would upload {local_rel_path} -> public_id: {pub_id}"
+                        f"    [DRY-RUN] Would {action_verb} {local_rel_path} -> public_id: {pub_id}"
                     )
                 else:
-                    self.stdout.write(f"    Uploading {local_rel_path} -> public_id: {pub_id}...")
+                    action_verb = "Overwriting" if exists_in_cloud else "Uploading"
+                    self.stdout.write(f"    {action_verb} {local_rel_path} -> public_id: {pub_id}...")
                     try:
                         upload_res = cloudinary.uploader.upload(
                             local_abs_path,
                             public_id=pub_id,
-                            overwrite=False,
+                            overwrite=True,
+                            invalidate=True,
                             resource_type="image",
                         )
                         cloud_url = upload_res.get("secure_url") or upload_res.get("url")
