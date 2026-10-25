@@ -105,8 +105,8 @@ def submit_3d_conversion(user, outfit_job_id: int) -> tuple[ThreeDConversion, bo
         )
         logger.info("[3D CONVERSION] Creating ThreeDConversion %s", conversion.id)
 
-    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
-    webhook_url = f"{base_url}/api/v1/model3d/webhook/"
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").strip().rstrip("/")
+    webhook_url = f"{base_url}/api/v1/model3d/webhook/" if (base_url and base_url.startswith(("http://", "https://"))) else None
 
     image_url = outfit_job.display_result_image
 
