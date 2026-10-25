@@ -138,8 +138,8 @@ async def submit_try_on_job_async(job: OutfitJob) -> OutfitJob:
 
     prompt = build_try_on_prompt(avatar_obj, items)
 
-    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").rstrip("/")
-    webhook_url = f"{base_url}/api/v1/outfits/try-on/webhook/"
+    base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").strip().rstrip("/")
+    webhook_url = f"{base_url}/api/v1/outfits/try-on/webhook/" if (base_url and base_url.startswith(("http://", "https://"))) else None
 
     logger.info(
         "[OUTFITS TRY-ON DEBUG] Submitting OutfitJob %s with %d images to fal.ai (avatar style=%s)",
@@ -656,6 +656,12 @@ def resolve_auto_daily_avatar(user):
     if not system_default:
         system_default = Avatar.objects.filter(is_default=True).first()
 
+    fallback_img = (
+        "media/avatars/result/system_default_female_realistic_wfq4cl"
+        if user_gender == "female"
+        else "media/avatars/result/system_default_male_realistic_zo4mva"
+    )
+
     if not system_default:
         system_default = Avatar.objects.create(
             user=None,
@@ -664,8 +670,11 @@ def resolve_auto_daily_avatar(user):
             style=Avatar.Style.REALISTIC,
             status=Avatar.JobStatus.DONE,
             is_saved=True,
-            result_image="avatars/result/default_avatar.png",
+            result_image=fallback_img,
         )
+    elif not system_default.result_image or "default_avatar.png" in system_default.result_image.name:
+        system_default.result_image = fallback_img
+        system_default.save(update_fields=["result_image", "updated_at"])
 
     return system_default
 
