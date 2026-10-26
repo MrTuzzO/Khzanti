@@ -107,3 +107,91 @@ class PostSerializer(serializers.ModelSerializer):
             PostImage.objects.create(post=post, image=image)
             
         return post
+
+
+class FriendsStyleRatingSerializer(serializers.Serializer):
+    total_ratings = serializers.IntegerField(default=0)
+    average_rating = serializers.FloatField(allow_null=True)
+    color_harmony = serializers.FloatField(allow_null=True)
+    trendy = serializers.FloatField(allow_null=True)
+    overall_matching = serializers.FloatField(allow_null=True)
+    accessories = serializers.FloatField(allow_null=True)
+    user_rating = serializers.DictField(allow_null=True, required=False)
+
+
+class FriendsStyleReasoningSerializer(serializers.Serializer):
+    title = serializers.CharField(allow_blank=True, allow_null=True)
+    subtitle = serializers.CharField(allow_blank=True, allow_null=True)
+    items = serializers.ListField(child=serializers.CharField(), default=list)
+    note = serializers.CharField(allow_blank=True, allow_null=True)
+
+
+class FriendsStyleItemSerializer(serializers.Serializer):
+    style_type = serializers.ChoiceField(
+        choices=["Outfit", "Post"],
+        help_text="Discriminator: 'Outfit' for friend's daily public outfit, 'Post' for feed post.",
+    )
+    id = serializers.IntegerField(help_text="ID of the SavedOutfit (if Outfit) or Post (if Post)")
+    outfit_id = serializers.IntegerField(allow_null=True, required=False, help_text="OutfitJob ID")
+    post_id = serializers.IntegerField(allow_null=True, required=False, help_text="Post ID")
+
+    friend_id = serializers.IntegerField(help_text="User ID of the friend")
+    friend_name = serializers.CharField(help_text="Full display name of the friend")
+    friend_username = serializers.CharField(help_text="Username of the friend")
+    friend_avatar = serializers.CharField(allow_null=True, help_text="Avatar/profile picture URL of the friend")
+
+    outfit_image = serializers.CharField(allow_null=True, help_text="Main image URL (outfit try-on image or primary post image)")
+    images = serializers.ListField(child=serializers.CharField(), default=list, help_text="List of image URLs (for post carousel/multi-images)")
+    caption = serializers.CharField(allow_blank=True, allow_null=True, help_text="Post caption (null for Outfit)")
+
+    date = serializers.DateField(help_text="Target calendar date (YYYY-MM-DD)")
+    created_at = serializers.DateTimeField(help_text="Creation timestamp")
+
+    is_saved_by_viewer = serializers.BooleanField(allow_null=True, required=False, help_text="Whether authenticated user has saved this outfit")
+    is_shared = serializers.BooleanField(required=False, default=True, help_text="Public visibility flag")
+    is_daily_selection = serializers.BooleanField(required=False, default=False, help_text="Whether this is the user's selected daily outfit")
+    privacy = serializers.CharField(required=False, default="public")
+
+    reasoning = FriendsStyleReasoningSerializer(allow_null=True, required=False, help_text="Outfit styling breakdown (null for Post)")
+    ratings = FriendsStyleRatingSerializer(allow_null=True, required=False, help_text="Rating averages and total count")
+
+
+class SaveFriendOutfitSerializer(serializers.Serializer):
+    outfit_id = serializers.IntegerField(
+        required=False,
+        help_text="ID of the friend's OutfitJob to save. Either outfit_id or saved_outfit_id must be provided."
+    )
+    saved_outfit_id = serializers.IntegerField(
+        required=False,
+        help_text="ID of the friend's SavedOutfit. Either outfit_id or saved_outfit_id must be provided."
+    )
+    date = serializers.DateField(
+        required=False,
+        help_text="Calendar date to associate with your saved outfit (defaults to today)."
+    )
+    note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Optional personal note for this saved outfit."
+    )
+    action = serializers.ChoiceField(
+        choices=["save", "unsave", "toggle"],
+        default="save",
+        required=False,
+        help_text="Action to perform: 'save' (default), 'unsave', or 'toggle'."
+    )
+
+    def validate(self, attrs):
+        if not attrs.get("outfit_id") and not attrs.get("saved_outfit_id"):
+            raise serializers.ValidationError("Either outfit_id or saved_outfit_id must be provided.")
+        return attrs
+
+
+class SaveFriendOutfitResponseSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    message = serializers.CharField()
+    is_saved = serializers.BooleanField()
+    outfit_id = serializers.IntegerField()
+    saved_outfit_id = serializers.IntegerField(allow_null=True)
+    saved_date = serializers.DateField(allow_null=True)
+
