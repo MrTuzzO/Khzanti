@@ -89,15 +89,24 @@ ASGI_APPLICATION = 'Khzanti.asgi.application'
 
 # Database
 
+import sys
 import dj_database_url
 
-DATABASES = {
-    "default": dj_database_url.parse(
-        os.getenv("DATABASE_URL"),
-        conn_max_age=600,
-        ssl_require=True,
-    )
-}
+if 'test' in sys.argv:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    }
+else:
+    DATABASES = {
+        "default": dj_database_url.parse(
+            os.getenv("DATABASE_URL"),
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
 
 
 # Password validation
