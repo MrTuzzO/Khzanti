@@ -84,16 +84,18 @@ def resolve_user_default_avatar(user, requested_style=None):
 
 AVATAR_STYLE_PROMPTS = {
     Avatar.Style.REALISTIC: (
-        "5. VISUAL STYLE & QUALITY STANDARD (Premium Realistic Digital Human Avatar):\n"
-        "- Render as a premium realistic digital human avatar: human, believable, and anatomically precise, with realistic skin texture, subtle microdetail, realistic eyes, hair, hands, fabric drape, and natural studio lighting.\n"
-        "- The result must retain the polished, cohesive look of an intentionally created digital avatar — NOT an unprocessed raw camera photograph, raw smartphone picture, or documentary photo.\n"
-        "- Avoid uncanny plastic/CGI rendering as well as raw photographic camera artifacts. Target: authentic human appearance + polished digital-avatar rendering."
+        "4. VISUAL STYLE & QUALITY STANDARD (Premium Realistic 3D Digital Human Avatar):\n"
+        "- Render as a premium realistic 3D digital human avatar: human, believable, and anatomically precise, with realistic 3D skin texture, sculpted digital features, realistic eyes, hair, hands, 3D fabric drape, and natural studio 3-point lighting.\n"
+        "- The result must retain the polished, cohesive look of an intentionally created realistic 3D digital avatar — NOT an unprocessed raw camera photograph, raw smartphone picture, documentary photo, or filtered/retouched photograph.\n"
+        "- Render in high-fidelity 3D digital human character aesthetic (such as modern cinematic 3D character engine rendering) with clean digital subsurface scattering and studio lighting. Target: authentic human likeness + polished realistic 3D digital-avatar rendering."
     ),
     Avatar.Style.CARTOON: (
-        "5. VISUAL STYLE & QUALITY STANDARD (Polished 3D Cartoon / Stylized Character Avatar):\n"
-        "- Render as a polished 3D cartoon / stylized digital character avatar.\n"
-        "- Consistent artistic visual language: clean silhouettes, smooth stylized shading, cohesive lighting, charming stylized proportions, and polished facial/hair/clothing rendering.\n"
-        "- Coherent stylized artwork: Must look intentionally rendered as ONE complete illustrated piece, with no photorealistic or mismatched textures."
+        "4. VISUAL STYLE & QUALITY STANDARD (Polished 3D Cartoon / Stylized Character Avatar):\n"
+        "- Render as a full-body polished 3D cartoon / stylized digital character avatar, completely visible from the top of the head down to both feet.\n"
+        "- MANDATORY FULL-BODY FRAMING: The entire stylized character MUST be visible head-to-toe in a standardized upright, front-facing standing pose, perfectly centered within the 9:16 canvas with generous margins above the head and below the feet.\n"
+        "- STRICTLY PROHIBITED: Bust shots, chest-up illustrations, waist-up framing, half-body crops, or cropped character compositions are strictly forbidden. Do NOT crop at the knees, ankles, or feet.\n"
+        "- Visual execution: Consistent artistic visual language with clean silhouettes, smooth stylized shading, cohesive lighting, charming stylized proportions, expressive 3D cartoon facial features, stylized hair, and physically conforming 3D stylized clothing with natural fabric drape.\n"
+        "- Coherent stylized artwork: Must look intentionally rendered as ONE complete illustrated 3D character piece, with no photorealistic or mismatched textures."
     ),
 }
 
@@ -112,9 +114,10 @@ def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
     # 1. Primary Identity & Person Reference Directive (Reference vs Composition)
     identity_lines = [
         "1. PRIMARY IDENTITY & REFERENCE DIRECTIVE (Image 1 is a Reference, NOT a Composition Template):",
-        "- Treat Image 1 as a reference to understand the person's physical characteristics, NOT as a photographic composition to copy.",
+        "- Treat Image 1 solely as visual reference data to extract the subject's physical identity and clothing. Do NOT modify, retouch, or paint over the original photograph.",
+        "- PROHIBITED: Do NOT apply a photo filter, beauty filter, airbrushing, or direct photographic edit to Image 1. Discard the original photograph's camera framing, crop, background, lighting, optical distortion, noise, photographic artifacts, and raw photo appearance.",
         "- Do NOT reproduce the original image's camera framing, crop, background, photographic artifacts, or raw photo appearance.",
-        "- Extract and faithfully preserve the person's recognizable features: facial structure, face shape, eyes, nose, mouth, jawline, skin tone, hair color, hair texture, hairstyle, approximate age, and likeness.",
+        "- Extract and faithfully preserve the person's recognizable features: facial structure, face shape, eyes, nose, mouth, jawline, skin tone, hair color, hair texture, hairstyle, approximate age, and likeness in the newly synthesized avatar.",
     ]
 
     # Gender handling: explicit user profile constraint if provided, else visual inference from person
@@ -134,10 +137,21 @@ def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
     body_lines = [
         "2. MANDATORY FULL-BODY AVATAR COMPOSITION (Head-to-Toe Framing):",
         "- MANDATORY FULL-BODY REQUIREMENT: Regardless of whether Image 1 is a face-only close-up, headshot, chest-up portrait, half-body photo, or full-body photo, the output MUST ALWAYS be a complete, head-to-toe full-body avatar.",
-        "- The source image crop must NEVER determine the final avatar crop. Do NOT generate portrait-only, chest-up, waist-up, or cropped-leg compositions.",
-        "- Construct the complete human body naturally: full head, neck, shoulders, torso, arms, hands, waist, hips, both legs, and feet visible in frame.",
-        "- Composition: Clean, centered, full-body character presentation with ample surrounding space against a plain, neutral light gray studio background.",
+        "- The source image crop must NEVER determine the final avatar crop. The source image crop and camera angle must NEVER determine the final avatar crop or composition. Do NOT generate portrait-only, chest-up, waist-up, or cropped-leg compositions.",
+        "- EXPLICITLY PROHIBITED FRAMING: Bust shots, portrait close-ups, waist-up compositions, chest-up compositions, half-body framing, knee-up framing, or cropping any part of the person's body are strictly forbidden.",
+        "- MANDATORY FULL-BODY VISIBILITY REQUIREMENTS (Top-to-Bottom):",
+        "  * Entire head visible with complete hair, face, and chin.",
+        "  * Entire torso visible including neck, shoulders, chest, waist, and hips.",
+        "  * Both arms and hands visible with elbows, wrists, and fingers.",
+        "  * Both legs visible with thighs, knees, and calves.",
+        "  * Both feet completely visible with shoes/feet fully shown on the floor.",
+        "  * Construct the complete human body naturally: full head, neck, shoulders, torso, arms, hands, waist, hips, both legs, and feet visible in frame.",
+        "  * Zero cropping: No cropping at the head, hands, knees, ankles, or feet.",
+        "- STANDARDIZED UPRIGHT POSE: The generated avatar MUST stand straight upright, front-facing directly towards the camera, with head level, eyes looking forward, arms hanging relaxed naturally at the sides, torso erect, both legs straight, and feet planted shoulder-width apart.",
+        "- REJECT ORIGINAL POSE: Completely override and discard any pose present in Image 1 (such as sitting, leaning, selfie hand gestures, tilted head, or candid movement). The final avatar MUST be in the standardized, front-facing, upright standing pose suitable for virtual try-on and wardrobe dressing.",
         "- Pose: Standing naturally in a relaxed, balanced, anatomically natural pose suitable for virtual try-on and wardrobe dressing.",
+        "- FRAMING & PADDING: Full body centered within the image with adequate empty space above the head and below the feet. The entire figure must fit comfortably inside the frame without touching any edges.",
+        "- Composition: Clean, centered, full-body character presentation with ample surrounding space against a plain, neutral light gray studio background.",
         "- Accurately preserve visible height, body build, weight distribution, and proportions from Image 1.",
     ]
 
@@ -162,7 +176,11 @@ def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
 
     # 3. Authoritative Source Clothing Reconstruction & Partial/Cropped Fallback Hierarchy
     clothing_prompt = (
-        "3. AUTHORITATIVE CLOTHING RECONSTRUCTION & PARTIAL-IMAGE FALLBACK HIERARCHY:\n"
+        "3. AUTHORITATIVE CLOTHING RECONSTRUCTION & 3D DIGITAL GARMENTS:\n"
+        "- EXACT OUTFIT PRESERVATION: Reconstruct the exact outfit worn in Image 1 onto the new 3D avatar's body. Preserve all garment elements: garment category/type, cut, silhouette, length, sleeves, collar/neckline, colors, fabric patterns, logos/prints, layering, and any headwear (such as hijab, turban, or hat) if worn in Image 1.\n"
+        "- 3D DIGITAL GARMENTS: The clothing must be modeled and rendered as high-quality 3D digital garments that conform naturally to the avatar's upright standing anatomy and pose, with realistic fabric draping, natural seams, and soft contact shadows, optimized for virtual wardrobe dressing and try-on.\n"
+        "- NO DEFAULT-AVATAR CLOTHING OVERWRITE: Strictly do NOT replace the user's uploaded outfit with default avatar clothing (such as default business suits, generic coats, or default dresses) when the source image displays clothing.\n"
+        "- AUTHORITATIVE CLOTHING RECONSTRUCTION & PARTIAL-IMAGE FALLBACK HIERARCHY:\n"
         "- PRIORITY 1 (COMPLETE SOURCE CLOTHING): If Image 1 clearly shows complete clothing, faithfully reconstruct that exact outfit (category, silhouette, cut, length, sleeves, collar/neckline, construction, colors, fabric patterns, layering, and headwear such as hijab/abaya/turban if present). Reconstruct the garment naturally rather than pasting pixels.\n"
         "- PRIORITY 2 (PARTIAL SOURCE CLOTHING): If Image 1 shows partial clothing with enough information to identify the garment, preserve what is visible and naturally complete it.\n"
         "- PRIORITY 3 (FALLBACK FOR CROPPED / FACE-ONLY / HALF-BODY SOURCE IMAGES):\n"
@@ -214,6 +232,7 @@ def submit_avatar_job(avatar: Avatar) -> None:
             arguments={
                 "prompt": prompt,
                 "image_urls": [selfie_url],
+                "aspect_ratio": "9:16",
                 "resolution": "1K",
                 "output_format": "png",
             },
