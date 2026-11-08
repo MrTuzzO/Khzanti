@@ -107,15 +107,149 @@ class AvatarPromptAndPipelineTestCase(APITestCase):
 
     def test_realistic_style_generates_premium_digital_human_avatar_prompt(self, mock_cloud):
         prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {"gender": "male"})
-        self.assertIn("Premium Realistic Digital Human Avatar", prompt)
-        self.assertIn("Render as a premium realistic digital human avatar", prompt)
+        self.assertIn("Premium Realistic 3D Digital Human Avatar", prompt)
+        self.assertIn("Render as a premium realistic 3D digital human avatar", prompt)
         self.assertIn("NOT an unprocessed raw camera photograph", prompt)
-        self.assertIn("Target: authentic human appearance + polished digital-avatar rendering", prompt)
+        self.assertIn("Target: authentic human likeness + polished realistic 3D digital-avatar rendering", prompt)
+
+    def test_prompt_prohibits_photo_filtering_and_retouching(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+        self.assertIn("PROHIBITED: Do NOT apply a photo filter, beauty filter, airbrushing, or direct photographic edit to Image 1", prompt)
+        self.assertIn("Do NOT modify, retouch, or paint over the original photograph", prompt)
+        self.assertIn("Discard the original photograph's camera framing, crop, background, lighting, optical distortion, noise, photographic artifacts", prompt)
+
+    def test_prompt_requires_standardized_upright_front_facing_pose_and_rejects_source_pose(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+        self.assertIn("STANDARDIZED UPRIGHT POSE: The generated avatar MUST stand straight upright, front-facing directly towards the camera", prompt)
+        self.assertIn("REJECT ORIGINAL POSE: Completely override and discard any pose present in Image 1", prompt)
+        self.assertIn("head level, eyes looking forward, arms hanging relaxed naturally at the sides", prompt)
+
+    def test_prompt_enforces_exact_outfit_preservation_and_prohibits_default_outfit_overwrite(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+        self.assertIn("EXACT OUTFIT PRESERVATION: Reconstruct the exact outfit worn in Image 1 onto the new 3D avatar's body", prompt)
+        self.assertIn("3D DIGITAL GARMENTS: The clothing must be modeled and rendered as high-quality 3D digital garments", prompt)
+        self.assertIn("NO DEFAULT-AVATAR CLOTHING OVERWRITE: Strictly do NOT replace the user's uploaded outfit with default avatar clothing", prompt)
+
+    def test_both_realistic_and_cartoon_styles_supported(self, mock_cloud):
+        prompt_real = build_avatar_prompt(Avatar.Style.REALISTIC, {"gender": "male"})
+        prompt_cart = build_avatar_prompt(Avatar.Style.CARTOON, {"gender": "female"})
+
+        self.assertIn("Premium Realistic 3D Digital Human Avatar", prompt_real)
+        self.assertIn("Polished 3D Cartoon / Stylized Character Avatar", prompt_cart)
+        self.assertIn("high-fidelity 3D digital human character aesthetic", prompt_real)
+        self.assertIn("Consistent artistic visual language", prompt_cart)
+
+    def test_strengthened_full_body_composition_directives(self, mock_cloud):
+        prompt = build_avatar_prompt(Avatar.Style.REALISTIC, {})
+
+        # Visibility requirements
+        self.assertIn("Entire head visible", prompt)
+        self.assertIn("Entire torso visible", prompt)
+        self.assertIn("Both arms and hands visible", prompt)
+        self.assertIn("Both legs visible", prompt)
+        self.assertIn("Both feet completely visible", prompt)
+        self.assertIn("Zero cropping: No cropping at the head, hands, knees, ankles, or feet", prompt)
+
+        # Pose & framing
+        self.assertIn("STANDARDIZED UPRIGHT POSE: The generated avatar MUST stand straight upright, front-facing directly towards the camera", prompt)
+        self.assertIn("Full body centered within the image with adequate empty space above the head and below the feet", prompt)
+
+        # Explicit prohibitions
+        self.assertIn("EXPLICITLY PROHIBITED FRAMING: Bust shots, portrait close-ups, waist-up compositions, chest-up compositions, half-body framing", prompt)
+        self.assertIn("cropping any part of the person's body are strictly forbidden", prompt)
+
+    def test_composition_consistency_for_various_photo_types(self, mock_cloud):
+        # 1. Full-body photo input
+        # 2. Sitting photo input
+        # 3. Angled selfie input
+        # 4. Cropped upper-body photo input
+        photo_types = ["full_body.png", "sitting_photo.png", "angled_selfie.png", "cropped_upper_body.png"]
+
+        user = User.objects.create_user(
+            email="varied_photos@example.com",
+            name="Photo Test User",
+            password="password123",
+        )
+
+        for photo_name in photo_types:
+            dummy_file = SimpleUploadedFile(
+                name=photo_name,
+                content=VALID_PNG_BYTES,
+                content_type="image/png",
+            )
+            avatar = Avatar.objects.create(
+                user=user,
+                source_photo=dummy_file,
+                style=Avatar.Style.REALISTIC,
+                status=Avatar.JobStatus.PENDING,
+            )
+
+            mock_handle = MagicMock()
+            mock_handle.request_id = f"mock_{photo_name}"
+
+            with patch("fal_client.submit", return_value=mock_handle) as mock_submit:
+                submit_avatar_job(avatar)
+                mock_submit.assert_called_once()
+                args = mock_submit.call_args.kwargs.get("arguments", {})
+
+                # Strict 9:16 aspect ratio configured
+                self.assertEqual(args.get("aspect_ratio"), "9:16")
+                self.assertEqual(args.get("resolution"), "1K")
+                self.assertEqual(args.get("output_format"), "png")
+
+                # Prompt enforces mandatory full body and rejects photo's pose/crop
+                p = args.get("prompt", "")
+                self.assertIn("MANDATORY FULL-BODY REQUIREMENT", p)
+                self.assertIn("REJECT ORIGINAL POSE", p)
+                self.assertIn("Both feet completely visible", p)
+                self.assertIn("Full body centered within the image with adequate empty space", p)
 
     def test_cartoon_style_generates_stylized_art_prompt(self, mock_cloud):
         prompt = build_avatar_prompt(Avatar.Style.CARTOON, {"gender": "female"})
         self.assertIn("Polished 3D Cartoon / Stylized Character Avatar", prompt)
         self.assertIn("Consistent artistic visual language", prompt)
+        self.assertIn("Render as a full-body polished 3D cartoon / stylized digital character avatar", prompt)
+        self.assertIn("completely visible from the top of the head down to both feet", prompt)
+        self.assertIn("MANDATORY FULL-BODY FRAMING: The entire stylized character MUST be visible head-to-toe", prompt)
+        self.assertIn("STRICTLY PROHIBITED: Bust shots, chest-up illustrations, waist-up framing, half-body crops", prompt)
+        self.assertIn("expressive 3D cartoon facial features", prompt)
+        self.assertIn("clean silhouettes, smooth stylized shading", prompt)
+        self.assertIn("Both feet completely visible", prompt)
+        self.assertIn("STANDARDIZED UPRIGHT POSE", prompt)
+
+    def test_cartoon_avatar_pipeline_submits_9_16_aspect_ratio_and_full_body_prompt(self, mock_cloud):
+        user = User.objects.create_user(
+            email="cartoon_user@example.com",
+            name="Cartoon User",
+            password="password123",
+        )
+        avatar = Avatar.objects.create(
+            user=user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.PENDING,
+        )
+
+        mock_handle = MagicMock()
+        mock_handle.request_id = "mock_fal_cartoon_req"
+
+        with patch("fal_client.submit", return_value=mock_handle) as mock_submit:
+            submit_avatar_job(avatar)
+
+            mock_submit.assert_called_once()
+            args = mock_submit.call_args.kwargs.get("arguments", {})
+
+            self.assertEqual(args.get("aspect_ratio"), "9:16")
+            self.assertEqual(args.get("resolution"), "1K")
+            self.assertEqual(args.get("output_format"), "png")
+
+            p = args.get("prompt", "")
+            self.assertIn("Polished 3D Cartoon / Stylized Character Avatar", p)
+            self.assertIn("MANDATORY FULL-BODY REQUIREMENT", p)
+            self.assertIn("Render as a full-body polished 3D cartoon", p)
+            self.assertIn("STRICTLY PROHIBITED: Bust shots", p)
+            self.assertIn("Both feet completely visible", p)
+            self.assertIn("EXACT OUTFIT PRESERVATION", p)
 
     def test_profile_information_incorporated_into_prompt(self, mock_cloud):
         profile_constraints = {
@@ -161,6 +295,9 @@ class AvatarPromptAndPipelineTestCase(APITestCase):
 
             self.assertIn("image_urls", arguments)
             self.assertEqual(len(arguments["image_urls"]), 1)
+            self.assertEqual(arguments.get("aspect_ratio"), "9:16")
+            self.assertEqual(arguments.get("resolution"), "1K")
+            self.assertEqual(arguments.get("output_format"), "png")
 
             prompt = arguments.get("prompt", "")
             self.assertIn("PRIMARY IDENTITY & REFERENCE DIRECTIVE", prompt)
