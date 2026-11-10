@@ -302,56 +302,20 @@ class SavedOutfitUpdateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-class SavedOutfitSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
-    saved_date = serializers.DateField(source="date", read_only=True)
-    outfit_job = OutfitJobSerializer(read_only=True)
-
-    class Meta:
-        model = SavedOutfit
-        fields = [
-            "id",
-            "saved_date",
-            "note",
-            "is_shared",
-            "outfit_job",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = fields
-
-
 RATING_CATEGORIES = ["color_harmony", "trendy", "overall_matching", "accessories"]
 
 
-class OutfitRatingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = OutfitRating
-        fields = RATING_CATEGORIES
-
-
-class PublicSavedOutfitSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
-    saved_date = serializers.DateField(source="date", read_only=True)
-    outfit_job = OutfitJobSerializer(read_only=True)
-    ratings_count = serializers.IntegerField(read_only=True, default=0)
-    average_rating = serializers.SerializerMethodField()
-    rating_breakdown = serializers.SerializerMethodField()
-
-    class Meta:
-        model = SavedOutfit
-        fields = [
-            "id",
-            "saved_date",
-            "note",
-            "outfit_job",
-            "ratings_count",
-            "average_rating",
-            "rating_breakdown",
-            "created_at",
-        ]
-        read_only_fields = fields
+class SavedOutfitRatingMixin:
+    """
+    Shared helper methods for aggregating rating details across SavedOutfit serializers.
+    """
 
     def _category_averages(self, obj):
         return {field: getattr(obj, f"avg_{field}", None) for field in RATING_CATEGORIES}
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_ratings_count(self, obj):
+        return getattr(obj, "ratings_count", 0)
 
     @extend_schema_field(serializers.FloatField(allow_null=True))
     def get_average_rating(self, obj):
@@ -366,6 +330,59 @@ class PublicSavedOutfitSerializer(NullableScalarModelSerializerMixin, serializer
             field: (round(value, 1) if value is not None else None)
             for field, value in self._category_averages(obj).items()
         }
+
+
+class SavedOutfitSerializer(NullableScalarModelSerializerMixin, SavedOutfitRatingMixin, serializers.ModelSerializer):
+    saved_date = serializers.DateField(source="date", read_only=True)
+    outfit_job = OutfitJobSerializer(read_only=True)
+    ratings_count = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
+    rating_breakdown = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SavedOutfit
+        fields = [
+            "id",
+            "saved_date",
+            "note",
+            "is_shared",
+            "outfit_job",
+            "ratings_count",
+            "average_rating",
+            "rating_breakdown",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class OutfitRatingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OutfitRating
+        fields = RATING_CATEGORIES
+
+
+class PublicSavedOutfitSerializer(NullableScalarModelSerializerMixin, SavedOutfitRatingMixin, serializers.ModelSerializer):
+    saved_date = serializers.DateField(source="date", read_only=True)
+    outfit_job = OutfitJobSerializer(read_only=True)
+    ratings_count = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
+    rating_breakdown = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SavedOutfit
+        fields = [
+            "id",
+            "saved_date",
+            "note",
+            "is_shared",
+            "outfit_job",
+            "ratings_count",
+            "average_rating",
+            "rating_breakdown",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class RaterSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
