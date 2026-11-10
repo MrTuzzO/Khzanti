@@ -116,10 +116,25 @@ class TryOnCreateSerializer(serializers.Serializer):
         return attrs
 
 
+def get_avatar_original_image(avatar, request=None):
+    if not avatar or not getattr(avatar, "source_photo", None):
+        return None
+    try:
+        url = avatar.source_photo.url
+    except Exception:
+        return None
+    if not url:
+        return None
+    if request and url.startswith("/"):
+        return request.build_absolute_uri(url)
+    return url
+
+
 class OutfitJobSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
+    original_image = serializers.SerializerMethodField()
     saved = serializers.BooleanField(source="is_saved", read_only=True)
     generated_date = serializers.DateField(source="scheduled_date", read_only=True)
 
@@ -133,6 +148,7 @@ class OutfitJobSerializer(NullableScalarModelSerializerMixin, serializers.ModelS
             "avatar",
             "wardrobe_items",
             "result_image",
+            "original_image",
             "is_saved",
             "saved",
             "reasoning_title",
@@ -150,10 +166,21 @@ class OutfitJobSerializer(NullableScalarModelSerializerMixin, serializers.ModelS
         url = obj.display_result_image
         return url if url else None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_original_image(self, obj):
+        request = self.context.get("request") if getattr(self, "context", None) else None
+        # Privacy check: only the outfit job owner can view their private source photo
+        if request and hasattr(request, "user") and request.user.is_authenticated and obj.user_id:
+            if request.user.id != obj.user_id:
+                return None
+        avatar = getattr(obj, "avatar", None)
+        return get_avatar_original_image(avatar, request)
+
 
 class OutfitJobStatusSerializer(NullableScalarModelSerializerMixin, serializers.Serializer):
     status = serializers.CharField()
     result_image = serializers.CharField(allow_null=True)
+    original_image = serializers.CharField(required=False, allow_null=True)
     error_message = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
@@ -162,6 +189,7 @@ class TodayOutfitSerializer(NullableScalarModelSerializerMixin, serializers.Mode
     avatar = serializers.PrimaryKeyRelatedField(read_only=True)
     wardrobe_items = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
     result_image = serializers.SerializerMethodField()
+    original_image = serializers.SerializerMethodField()
     saved = serializers.BooleanField(source="is_saved", read_only=True)
 
     class Meta:
@@ -174,6 +202,7 @@ class TodayOutfitSerializer(NullableScalarModelSerializerMixin, serializers.Mode
             "avatar",
             "wardrobe_items",
             "result_image",
+            "original_image",
             "is_saved",
             "saved",
             "reasoning_title",
@@ -192,6 +221,16 @@ class TodayOutfitSerializer(NullableScalarModelSerializerMixin, serializers.Mode
             url = obj.display_result_image
             return url if url else None
         return None
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_original_image(self, obj):
+        request = self.context.get("request") if getattr(self, "context", None) else None
+        # Privacy check: only the outfit job owner can view their private source photo
+        if request and hasattr(request, "user") and request.user.is_authenticated and obj.user_id:
+            if request.user.id != obj.user_id:
+                return None
+        avatar = getattr(obj, "avatar", None)
+        return get_avatar_original_image(avatar, request)
 
 
 class SavedOutfitCreateSerializer(serializers.ModelSerializer):
