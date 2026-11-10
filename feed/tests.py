@@ -278,6 +278,56 @@ class FriendsStyleAPITestCase(APITestCase):
         outfit_ids = [item["outfit_id"] for item in results]
         self.assertIn(job_bob_selected.id, outfit_ids)
 
+    def test_friends_style_feed_includes_both_original_and_generated_images(self):
+        self.client.force_authenticate(user=self.user)
+        # Update Alice's avatar to have a source photo
+        self.avatar_alice.source_photo = "avatars/source/alice_photo.jpg"
+        self.avatar_alice.save(update_fields=["source_photo"])
+
+        res = self.client.get(f"/api/v1/feed/friends-style/?date={self.today.isoformat()}&style_type=Outfit")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data.get("results", [])
+        outfit_item = next(item for item in results if item["outfit_id"] == self.job_alice_today.id)
+
+        self.assertIn("original_image", outfit_item)
+        self.assertIn("outfit_image", outfit_item)
+        self.assertIn("images", outfit_item)
+
+        self.assertIn("avatars/source/alice_photo.jpg", outfit_item["original_image"])
+        self.assertEqual(outfit_item["outfit_image"], "https://v3b.fal.media/alice_outfit_today.png")
+        self.assertEqual(len(outfit_item["images"]), 2)
+        self.assertIn(outfit_item["original_image"], outfit_item["images"])
+        self.assertIn(outfit_item["outfit_image"], outfit_item["images"])
+
+    def test_friends_style_feed_missing_original_photo_handled_gracefully(self):
+        self.client.force_authenticate(user=self.user)
+        # Bob's avatar has no source photo
+        self.avatar_bob.source_photo = None
+        self.avatar_bob.save(update_fields=["source_photo"])
+
+        job_bob = OutfitJob.objects.create(
+            user=self.friend2,
+            avatar=self.avatar_bob,
+            status=JobStatus.DONE,
+            scheduled_date=self.today,
+            fal_cdn_url="https://v3b.fal.media/bob_fit.png",
+        )
+        SavedOutfit.objects.create(
+            user=self.friend2,
+            outfit_job=job_bob,
+            date=self.today,
+            is_shared=True,
+        )
+
+        res = self.client.get(f"/api/v1/feed/friends-style/?date={self.today.isoformat()}&style_type=Outfit")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data.get("results", [])
+        bob_item = next(item for item in results if item["outfit_id"] == job_bob.id)
+
+        self.assertIsNone(bob_item["original_image"])
+        self.assertEqual(bob_item["outfit_image"], "https://v3b.fal.media/bob_fit.png")
+        self.assertEqual(bob_item["images"], ["https://v3b.fal.media/bob_fit.png"])
+
 
 class SaveFriendOutfitAPITestCase(APITestCase):
     def setUp(self):
