@@ -33,7 +33,7 @@ class PostSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False,
     )
-    
+
     avg_color_harmony = serializers.SerializerMethodField()
     avg_trendy = serializers.SerializerMethodField()
     avg_overall_matching = serializers.SerializerMethodField()
@@ -87,13 +87,13 @@ class PostSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return None
-        
+
         if hasattr(obj, "_user_rating_prefetched"):
             rating = obj._user_rating_prefetched
             if rating:
                 return PostRatingSerializer(rating).data
             return None
-            
+
         rating = PostRating.objects.filter(post=obj, rater=request.user).first()
         if rating:
             return PostRatingSerializer(rating).data
@@ -102,10 +102,10 @@ class PostSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         uploaded_images = validated_data.pop("uploaded_images", [])
         post = Post.objects.create(**validated_data)
-        
+
         for image in uploaded_images:
             PostImage.objects.create(post=post, image=image)
-            
+
         return post
 
 
@@ -141,7 +141,8 @@ class FriendsStyleItemSerializer(serializers.Serializer):
     friend_avatar = serializers.CharField(allow_null=True, help_text="Avatar/profile picture URL of the friend")
 
     outfit_image = serializers.CharField(allow_null=True, help_text="Main image URL (outfit try-on image or primary post image)")
-    images = serializers.ListField(child=serializers.CharField(), default=list, help_text="List of image URLs (for post carousel/multi-images)")
+    original_image = serializers.CharField(allow_null=True, required=False, help_text="Original uploaded photo URL")
+    images = serializers.ListField(child=serializers.CharField(), default=list, help_text="List of image URLs (for post carousel/multi-images or original and outfit images)")
     caption = serializers.CharField(allow_blank=True, allow_null=True, help_text="Post caption (null for Outfit)")
 
     date = serializers.DateField(help_text="Target calendar date (YYYY-MM-DD)")
