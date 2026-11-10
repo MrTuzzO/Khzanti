@@ -2754,3 +2754,285 @@ class OriginalAndGeneratedImageTogetherAPITestCase(APITestCase):
         self.assertIn("original_image", resp.data)
         self.assertIn("custom_user_photo.jpg", resp.data["original_image"])
         self.assertIn("status_test.png", resp.data["result_image"])
+
+
+class MultiUserOutfitRatingFlowTestCase(APITestCase):
+    """
+    Issue 5: Comprehensive tests for multi-user rating handling, duplicate prevention,
+    rating updates, rating count & average calculations, owner restrictions, and outfit isolation.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            email="owner@example.com",
+            username="owner",
+            password="Password123!",
+            name="Outfit Owner",
+        )
+        self.user_a = User.objects.create_user(
+            email="usera@example.com",
+            username="user_a",
+            password="Password123!",
+            name="User A",
+        )
+        self.user_b = User.objects.create_user(
+            email="userb@example.com",
+            username="user_b",
+            password="Password123!",
+            name="User B",
+        )
+        self.user_c = User.objects.create_user(
+            email="userc@example.com",
+            username="user_c",
+            password="Password123!",
+            name="User C",
+        )
+
+        self.avatar = Avatar.objects.create(
+            user=self.owner,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            result_image="avatars/result/avatar.png",
+        )
+        self.job_x = OutfitJob.objects.create(
+            user=self.owner,
+            avatar=self.avatar,
+            status=JobStatus.DONE,
+            result_image="outfits/result/outfit_x.png",
+        )
+        self.outfit_x = SavedOutfit.objects.create(
+            user=self.owner,
+            outfit_job=self.job_x,
+            date=timezone.now().date(),
+            is_shared=True,
+        )
+
+        self.job_y = OutfitJob.objects.create(
+            user=self.owner,
+            avatar=self.avatar,
+            status=JobStatus.DONE,
+            result_image="outfits/result/outfit_y.png",
+        )
+        self.outfit_y = SavedOutfit.objects.create(
+            user=self.owner,
+            outfit_job=self.job_y,
+            date=timezone.now().date(),
+            is_shared=True,
+        )
+
+    def test_multi_user_rating_flow_and_duplicate_update(self):
+        """
+        Scenario:
+        - User A rates Outfit X
+        - User B rates Outfit X
+        - User C rates Outfit X
+        - User A submits another rating for Outfit X (updates previous rating, no duplicate)
+        """
+        rate_url = f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/"
+        public_url = f"/api/v1/outfits/public/{self.owner.username}/"
+
+        # 1. Outfit initially has no ratings
+        self.client.force_authenticate(user=self.user_a)
+        resp_init = self.client.get(public_url)
+        item_x = next(item for item in resp_init.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 0)
+        self.assertIsNone(item_x["average_rating"])
+        self.assertIsNone(item_x["rating_breakdown"]["color_harmony"])
+
+        # 2. User A rates Outfit X (scores: 8, 8, 8, 8)
+        self.client.force_authenticate(user=self.user_a)
+        resp_a = self.client.post(
+            rate_url,
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+        self.assertEqual(resp_a.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp_a.data["color_harmony"], 8)
+
+        # Verify count = 1, avg = 8.0
+        resp_after_a = self.client.get(public_url)
+        item_x = next(item for item in resp_after_a.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 1)
+        self.assertEqual(item_x["average_rating"], 8.0)
+
+        # 3. User B rates Outfit X (scores: 6, 6, 6, 6)
+        self.client.force_authenticate(user=self.user_b)
+        resp_b = self.client.post(
+            rate_url,
+            {"color_harmony": 6, "trendy": 6, "overall_matching": 6, "accessories": 6},
+        )
+        self.assertEqual(resp_b.status_code, status.HTTP_201_CREATED)
+
+        # Verify count = 2, avg = (8+6)/2 = 7.0
+        resp_after_b = self.client.get(public_url)
+        item_x = next(item for item in resp_after_b.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 2)
+        self.assertEqual(item_x["average_rating"], 7.0)
+        self.assertEqual(item_x["rating_breakdown"]["color_harmony"], 7.0)
+
+        # 4. User C rates Outfit X (scores: 10, 10, 10, 10)
+        self.client.force_authenticate(user=self.user_c)
+        resp_c = self.client.post(
+            rate_url,
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.assertEqual(resp_c.status_code, status.HTTP_201_CREATED)
+
+        # Verify count = 3, avg = (8+6+10)/3 = 8.0
+        resp_after_c = self.client.get(public_url)
+        item_x = next(item for item in resp_after_c.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 3)
+        self.assertEqual(item_x["average_rating"], 8.0)
+
+        # 5. User A submits another rating for Outfit X (updated to 10, 10, 10, 10)
+        self.client.force_authenticate(user=self.user_a)
+        resp_a2 = self.client.post(
+            rate_url,
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        # Should return 200 OK (update, NOT 201)
+        self.assertEqual(resp_a2.status_code, status.HTTP_200_OK)
+
+        # Total count MUST REMAIN 3 (no duplicate created!)
+        self.assertEqual(OutfitRating.objects.filter(saved_outfit=self.outfit_x).count(), 3)
+
+        # Averages must update: (10 + 6 + 10) / 3 = 26/3 = 8.666... -> rounded to 8.7
+        resp_after_a2 = self.client.get(public_url)
+        item_x = next(item for item in resp_after_a2.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 3)
+        self.assertEqual(item_x["average_rating"], 8.7)
+        self.assertEqual(item_x["rating_breakdown"]["color_harmony"], 8.7)
+
+    def test_database_constraint_prevents_duplicate_ratings(self):
+        """Database UniqueConstraint prevents duplicate (saved_outfit, rater) rows."""
+        from django.db import IntegrityError
+
+        OutfitRating.objects.create(
+            saved_outfit=self.outfit_x,
+            rater=self.user_a,
+            color_harmony=5,
+            trendy=5,
+            overall_matching=5,
+            accessories=5,
+        )
+
+        with self.assertRaises(IntegrityError):
+            OutfitRating.objects.create(
+                saved_outfit=self.outfit_x,
+                rater=self.user_a,
+                color_harmony=7,
+                trendy=7,
+                overall_matching=7,
+                accessories=7,
+            )
+
+    def test_owner_cannot_rate_own_outfit(self):
+        """Outfit owner is rejected with 400 Bad Request when attempting to rate their own outfit."""
+        self.client.force_authenticate(user=self.owner)
+        resp = self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("cannot rate your own outfit", str(resp.data))
+
+    def test_private_outfit_cannot_be_rated(self):
+        """Private outfit (is_shared=False) returns 404 when rated by others."""
+        self.outfit_x.is_shared = False
+        self.outfit_x.save(update_fields=["is_shared"])
+
+        self.client.force_authenticate(user=self.user_a)
+        resp = self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_outfit_ratings_are_strictly_isolated(self):
+        """Ratings on Outfit X do not affect Outfit Y."""
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 9, "trendy": 9, "overall_matching": 9, "accessories": 9},
+        )
+
+        public_url = f"/api/v1/outfits/public/{self.owner.username}/"
+        resp = self.client.get(public_url)
+        results = resp.data["results"]
+        item_x = next(item for item in results if item["id"] == self.outfit_x.id)
+        item_y = next(item for item in results if item["id"] == self.outfit_y.id)
+
+        self.assertEqual(item_x["ratings_count"], 1)
+        self.assertEqual(item_x["average_rating"], 9.0)
+
+        # Outfit Y must remain unrated
+        self.assertEqual(item_y["ratings_count"], 0)
+        self.assertIsNone(item_y["average_rating"])
+
+    def test_rating_deletion_recalculates_aggregates(self):
+        """Deleting a rating removes it and accurately recalculates the remaining averages."""
+        # User A gives 10s, User B gives 6s
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.client.force_authenticate(user=self.user_b)
+        self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 6, "trendy": 6, "overall_matching": 6, "accessories": 6},
+        )
+
+        # User B deletes their rating
+        resp_del = self.client.delete(f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/")
+        self.assertEqual(resp_del.status_code, status.HTTP_200_OK)
+
+        # Verify database state
+        self.assertEqual(OutfitRating.objects.filter(saved_outfit=self.outfit_x).count(), 1)
+
+        # Verify aggregate: only User A's rating remains (avg = 10.0, count = 1)
+        public_url = f"/api/v1/outfits/public/{self.owner.username}/"
+        resp = self.client.get(public_url)
+        item_x = next(item for item in resp.data["results"] if item["id"] == self.outfit_x.id)
+        self.assertEqual(item_x["ratings_count"], 1)
+        self.assertEqual(item_x["average_rating"], 10.0)
+
+    def test_saved_outfit_ratings_list_view_permissions(self):
+        """Only the outfit owner can view the list of individual raters."""
+        # User A rates Outfit X
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+
+        detail_url = f"/api/v1/outfits/saved/{self.outfit_x.id}/ratings/"
+
+        # Stranger attempts to view individual raters -> 404
+        resp_stranger = self.client.get(detail_url)
+        self.assertEqual(resp_stranger.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Owner views individual raters -> 200 OK with rater card
+        self.client.force_authenticate(user=self.owner)
+        resp_owner = self.client.get(detail_url)
+        self.assertEqual(resp_owner.status_code, status.HTTP_200_OK)
+        results = resp_owner.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["rater"]["username"], "user_a")
+        self.assertEqual(results[0]["color_harmony"], 8)
+
+    def test_out_of_bounds_ratings_rejected(self):
+        """Values greater than 10 or less than 0 are rejected with 400 Bad Request."""
+        self.client.force_authenticate(user=self.user_a)
+        rate_url = f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/"
+
+        resp_over = self.client.post(
+            rate_url,
+            {"color_harmony": 11, "trendy": 5, "overall_matching": 5, "accessories": 5},
+        )
+        self.assertEqual(resp_over.status_code, status.HTTP_400_BAD_REQUEST)
+
+        resp_under = self.client.post(
+            rate_url,
+            {"color_harmony": -1, "trendy": 5, "overall_matching": 5, "accessories": 5},
+        )
+        self.assertEqual(resp_under.status_code, status.HTTP_400_BAD_REQUEST)
