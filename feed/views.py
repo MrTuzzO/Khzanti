@@ -166,29 +166,23 @@ class RatePostView(APIView):
         if post.privacy != "public" and post.user != request.user:
             raise ValidationError({"detail": "This post is private."})
 
-        rating, created = PostRating.objects.get_or_create(
+        serializer = PostRatingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        rating, created = PostRating.objects.update_or_create(
             post=post,
             rater=request.user,
-            defaults={
-                "color_harmony": request.data.get("color_harmony", 0),
-                "trendy": request.data.get("trendy", 0),
-                "overall_matching": request.data.get("overall_matching", 0),
-                "accessories": request.data.get("accessories", 0),
-            }
+            defaults=serializer.validated_data,
         )
 
-        if not created:
-            rating.color_harmony = request.data.get("color_harmony", rating.color_harmony)
-            rating.trendy = request.data.get("trendy", rating.trendy)
-            rating.overall_matching = request.data.get("overall_matching", rating.overall_matching)
-            rating.accessories = request.data.get("accessories", rating.accessories)
-            rating.save()
-            status_code = status.HTTP_200_OK
-        else:
-            status_code = status.HTTP_201_CREATED
+        status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(PostRatingSerializer(rating).data, status=status_code)
 
-        serializer = PostRatingSerializer(rating)
-        return Response(serializer.data, status=status_code)
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request, pk):
+        post = get_object_or_404(Post, pk=pk)
+        PostRating.objects.filter(post=post, rater=request.user).delete()
+        return Response({"detail": "Rating removed."}, status=status.HTTP_200_OK)
 
 
 class FriendsStyleFeedView(APIView):
