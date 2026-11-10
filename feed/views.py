@@ -37,7 +37,7 @@ class PostViewSet(viewsets.ModelViewSet):
 
         # Check if filtering by username (for profile view)
         target_username = self.request.query_params.get("username")
-        
+
         if target_username:
             if target_username == user.username:
                 # Viewing own profile: see all own posts
@@ -48,14 +48,14 @@ class PostViewSet(viewsets.ModelViewSet):
         else:
             # Default behavior if no username provided: just show own posts
             qs = qs.filter(user=user)
-        
+
         # Subquery for user's own rating
         user_rating_qs = PostRating.objects.filter(post=OuterRef("pk"), rater=user)
-        
+
         qs = qs.annotate(
             _prefetched_ratings_count=Count("ratings", distinct=True),
         )
-        
+
         # We also need averages. Django's annotate with Avg can get messy with multiple counts/joins.
         # Let's aggregate averages using a separate query or standard aggregation.
         qs = qs.annotate(
@@ -64,7 +64,7 @@ class PostViewSet(viewsets.ModelViewSet):
             overall_matching__avg=Avg("ratings__overall_matching"),
             accessories__avg=Avg("ratings__accessories"),
         )
-        
+
         qs = qs.prefetch_related(
             "images",
             "user",
@@ -74,7 +74,7 @@ class PostViewSet(viewsets.ModelViewSet):
                 to_attr="_user_rating_list"
             )
         )
-        
+
         return qs.order_by("-created_at")
 
     def get_object(self):
@@ -83,7 +83,7 @@ class PostViewSet(viewsets.ModelViewSet):
             obj._user_rating_prefetched = obj._user_rating_list[0]
         else:
             obj._user_rating_prefetched = None
-            
+
         # Put averages in a dict for serializer
         obj._prefetched_ratings_avg = {
             "color_harmony__avg": obj.color_harmony__avg,
@@ -114,7 +114,7 @@ class PostViewSet(viewsets.ModelViewSet):
                     obj._user_rating_prefetched = obj._user_rating_list[0]
                 else:
                     obj._user_rating_prefetched = None
-                    
+
                 obj._prefetched_ratings_avg = {
                     "color_harmony__avg": obj.color_harmony__avg,
                     "trendy__avg": obj.trendy__avg,
@@ -129,7 +129,7 @@ class PostViewSet(viewsets.ModelViewSet):
                 obj._user_rating_prefetched = obj._user_rating_list[0]
             else:
                 obj._user_rating_prefetched = None
-                
+
             obj._prefetched_ratings_avg = {
                 "color_harmony__avg": obj.color_harmony__avg,
                 "trendy__avg": obj.trendy__avg,
@@ -162,7 +162,7 @@ class RatePostView(APIView):
     )
     def post(self, request, pk):
         post = get_object_or_404(Post, pk=pk)
-        
+
         if post.privacy != "public" and post.user != request.user:
             raise ValidationError({"detail": "This post is private."})
 
@@ -176,7 +176,7 @@ class RatePostView(APIView):
                 "accessories": request.data.get("accessories", 0),
             }
         )
-        
+
         if not created:
             rating.color_harmony = request.data.get("color_harmony", rating.color_harmony)
             rating.trendy = request.data.get("trendy", rating.trendy)
@@ -289,6 +289,25 @@ class FriendsStyleFeedView(APIView):
                 if outfit_img_url and outfit_img_url.startswith("/"):
                     outfit_img_url = request.build_absolute_uri(outfit_img_url)
 
+                original_img_url = None
+                avatar = getattr(job, "avatar", None) if job else None
+                if avatar and getattr(avatar, "source_photo", None):
+                    try:
+                        orig_url = avatar.source_photo.url
+                        if orig_url:
+                            if orig_url.startswith("/"):
+                                original_img_url = request.build_absolute_uri(orig_url)
+                            else:
+                                original_img_url = orig_url
+                    except Exception:
+                        original_img_url = None
+
+                images_list = []
+                if original_img_url:
+                    images_list.append(original_img_url)
+                if outfit_img_url:
+                    images_list.append(outfit_img_url)
+
                 avg_vals = [
                     getattr(outfit, "avg_color_harmony", None),
                     getattr(outfit, "avg_trendy", None),
@@ -336,7 +355,8 @@ class FriendsStyleFeedView(APIView):
                     "friend_username": friend.username,
                     "friend_avatar": friend_avatar,
                     "outfit_image": outfit_img_url,
-                    "images": [outfit_img_url] if outfit_img_url else [],
+                    "original_image": original_img_url,
+                    "images": images_list,
                     "caption": None,
                     "date": target_date,
                     "created_at": outfit.created_at,
@@ -430,6 +450,7 @@ class FriendsStyleFeedView(APIView):
                     "friend_username": friend.username,
                     "friend_avatar": friend_avatar,
                     "outfit_image": first_image_url,
+                    "original_image": None,
                     "images": post_images,
                     "caption": post.caption or "",
                     "date": target_date,
