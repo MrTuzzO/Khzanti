@@ -1,5 +1,7 @@
 from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
+
+from core.validators import RestrictedImageField
 from wardrobe.models import Category
 from wardrobe.serializers import CategorySerializer
 from .models import ItemAnalysis, WardrobeItem
@@ -23,6 +25,7 @@ class NullableScalarModelSerializerMixin:
 
 
 class WardrobeItemCreateSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
+    image = RestrictedImageField(required=True)
     category = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(),
         help_text="Category ID (integer)."
