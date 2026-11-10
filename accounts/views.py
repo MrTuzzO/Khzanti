@@ -1,5 +1,7 @@
+import logging
+
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import generics, serializers, status
@@ -28,6 +30,22 @@ from .serializers import (
 )
 from .utils import send_otp_email
 
+logger = logging.getLogger(__name__)
+
+
+def revoke_user_refresh_tokens(user):
+    """
+    Invalidates all outstanding refresh tokens for a user upon password reset or change.
+    """
+    try:
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+        tokens = OutstandingToken.objects.filter(user=user)
+        for token in tokens:
+            BlacklistedToken.objects.get_or_create(token=token)
+    except Exception as exc:
+        logger.warning("Failed to blacklist user tokens: %s", exc)
+
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
@@ -38,7 +56,10 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        try:
+            user = serializer.save()
+        except IntegrityError:
+            raise serializers.ValidationError({"email": "An account with this email already exists."})
 
         return Response(
             {
@@ -63,8 +84,9 @@ class VerifyEmailView(APIView):
         otp_obj = serializer.validated_data["otp_obj"]
 
         with transaction.atomic():
-            otp_obj.is_used = True
-            otp_obj.save(update_fields=["is_used"])
+            consumed = OTP.objects.filter(pk=otp_obj.pk, is_used=False).update(is_used=True)
+            if not consumed:
+                raise serializers.ValidationError({"otp": "Invalid or expired OTP."})
             user.is_email_verified = True
             user.save(update_fields=["is_email_verified"])
 
@@ -171,8 +193,9 @@ class VerifyResetOTPView(APIView):
         otp_obj = serializer.validated_data["otp_obj"]
 
         with transaction.atomic():
-            otp_obj.is_used = True
-            otp_obj.save(update_fields=["is_used"])
+            consumed = OTP.objects.filter(pk=otp_obj.pk, is_used=False).update(is_used=True)
+            if not consumed:
+                raise serializers.ValidationError({"otp": "Invalid or expired OTP."})
             reset_token, _ = PasswordResetToken.create_for_user(user)
 
         expiry = getattr(settings, "PASSWORD_RESET_TOKEN_EXPIRY_MINUTES", 10)
@@ -198,10 +221,12 @@ class ResetPasswordView(APIView):
         token_obj = serializer.validated_data["token_obj"]
 
         with transaction.atomic():
-            token_obj.is_used = True
-            token_obj.save(update_fields=["is_used"])
+            consumed = PasswordResetToken.objects.filter(pk=token_obj.pk, is_used=False).update(is_used=True)
+            if not consumed:
+                raise serializers.ValidationError({"reset_token": "Invalid or expired reset token."})
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
+            revoke_user_refresh_tokens(user)
 
         return Response(
             {"detail": "Password reset successfully. You can now log in."},
@@ -292,8 +317,10 @@ class ChangePasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = request.user
-        user.set_password(serializer.validated_data["new_password"])
-        user.save(update_fields=["password"])
+        with transaction.atomic():
+            user.set_password(serializer.validated_data["new_password"])
+            user.save(update_fields=["password"])
+            revoke_user_refresh_tokens(user)
 
         return Response(
             {"detail": "Password changed successfully."},
