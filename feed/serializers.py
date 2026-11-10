@@ -1,4 +1,6 @@
 from rest_framework import serializers
+
+from core.validators import RestrictedImageField
 from .models import Post, PostImage, PostRating
 from social.serializers import PublicUserSerializer
 from django.db.models import Avg
@@ -29,7 +31,7 @@ class PostSerializer(serializers.ModelSerializer):
     user = PublicUserSerializer(read_only=True)
     images = PostImageSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
-        child=serializers.ImageField(allow_empty_file=False, use_url=False),
+        child=RestrictedImageField(allow_empty_file=False, use_url=False),
         write_only=True,
         required=False,
     )
