@@ -152,6 +152,11 @@ SITE_LOGO_DARK_URL = f"/{STATIC_URL}img/Logo_dark.png"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Image upload limits and allowed formats (configurable via environment variables)
+MAX_IMAGE_UPLOAD_SIZE_MB = int(os.getenv("MAX_IMAGE_UPLOAD_SIZE_MB", "100"))
+MAX_IMAGE_UPLOAD_SIZE_BYTES = MAX_IMAGE_UPLOAD_SIZE_MB * 1024 * 1024
+ALLOWED_IMAGE_EXTENSIONS = ("jpg", "jpeg", "png", "webp")
+
 CLOUDINARY_STORAGE = {
     "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
     "API_KEY": os.getenv("CLOUDINARY_API_KEY"),
