@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -47,7 +48,7 @@ class UserManager(BaseUserManager):
     def create_user(self, email, name, password=None, **extra_fields):
         if not email:
             raise ValueError("Email is required.")
-        email = self.normalize_email(email)
+        email = self.normalize_email(email).strip().lower()
         extra_fields.setdefault("username", self._generate_unique_username(email))
         user = self.model(email=email, name=name, **extra_fields)
         user.set_password(password)
@@ -95,6 +96,14 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def get_short_name(self):
         return self.name
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("email"),
+                name="unique_lower_email",
+            ),
+        ]
 
 
 class CustomerProfile(models.Model):
