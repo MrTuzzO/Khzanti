@@ -382,6 +382,12 @@ UNFOLD = {
                         "link": reverse_lazy("admin:index"),
                     },
                     {
+                        "title": _("Brand New"),
+                        "icon": "new_releases",
+                        "link": reverse_lazy("admin:core_brandnew_changelist"),
+                        "permission": _perm("core.view_brandnew"),
+                    },
+                    {
                         "title": _("Settings"),
                         "icon": "settings",
                         "link": reverse_lazy("admin:core_sitesettings_change"),

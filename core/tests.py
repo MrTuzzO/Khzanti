@@ -9,6 +9,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
 from avatars.models import Avatar
+from core.models import BrandNew, SiteSettings
 from core.validators import (
     RestrictedImageField,
     get_max_image_upload_size_bytes,
@@ -316,3 +317,219 @@ class UploadEndpointsIntegrationTestCase(APITestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertIn("exceeds the maximum allowed limit", str(response.content))
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY)
+class BrandNewAPITestCase(APITestCase):
+    """
+    Tests for Brand New REST API endpoints, validation rules, pagination,
+    and preservation of core SiteSettings.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="brand_tester@example.com",
+            name="Brand Tester",
+            password="Password123!",
+            username="brand_tester",
+            is_email_verified=True,
+        )
+        self.list_url = "/api/v1/brand-new/"
+        self.settings_url = "/api/v1/settings/"
+
+    def test_list_brand_new_anonymous_empty(self, mock_upload):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
+        self.assertIsNone(response.data["next"])
+        self.assertIsNone(response.data["previous"])
+        self.assertEqual(response.data["results"], [])
+
+    def test_list_brand_new_pagination_structure_and_navigation(self, mock_upload):
+        # Create 25 BrandNew items
+        for i in range(25):
+            BrandNew.objects.create(
+                title=f"Brand Item {i:02d}",
+                description=f"Description for item {i}",
+                product_image="brand_new/products/item.png",
+            )
+
+        # First page: page_size defaults to 20
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 25)
+        self.assertEqual(len(response.data["results"]), 20)
+        self.assertIsNotNone(response.data["next"])
+        self.assertIsNone(response.data["previous"])
+
+        # Navigate to second page using the next URL
+        next_page_url = response.data["next"]
+        response_page2 = self.client.get(next_page_url)
+        self.assertEqual(response_page2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_page2.data["count"], 25)
+        self.assertEqual(len(response_page2.data["results"]), 5)
+        self.assertIsNone(response_page2.data["next"])
+        self.assertIsNotNone(response_page2.data["previous"])
+
+    def test_create_brand_new_unauthenticated_fails(self, mock_upload):
+        f = SimpleUploadedFile("brand_product.png", VALID_PNG, content_type="image/png")
+        payload = {
+            "title": "Summer Denim Jacket",
+            "description": "Premium oversized denim jacket.",
+            "product_image": f,
+        }
+        response = self.client.post(self.list_url, payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_create_brand_new_authenticated_success(self, mock_upload):
+        self.client.force_authenticate(user=self.user)
+        f = SimpleUploadedFile("brand_product.png", VALID_PNG, content_type="image/png")
+        payload = {
+            "title": "  Summer Denim Jacket  ",
+            "description": "  Premium oversized denim jacket.  ",
+            "product_image": f,
+        }
+        response = self.client.post(self.list_url, payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["title"], "Summer Denim Jacket")
+        self.assertEqual(response.data["description"], "Premium oversized denim jacket.")
+        self.assertIn("id", response.data)
+        self.assertIn("created_at", response.data)
+        self.assertIn("updated_at", response.data)
+        self.assertTrue(BrandNew.objects.filter(title="Summer Denim Jacket").exists())
+
+    def test_create_brand_new_title_validation(self, mock_upload):
+        self.client.force_authenticate(user=self.user)
+
+        # Blank or whitespace-only title
+        f = SimpleUploadedFile("brand.png", VALID_PNG, content_type="image/png")
+        response = self.client.post(
+            self.list_url,
+            {"title": "   ", "description": "Valid description", "product_image": f},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(
+            "This field may not be blank." in response.data["message"]
+            or "Title cannot be blank" in response.data["message"]
+        )
+
+        # Title shorter than 3 characters
+        f2 = SimpleUploadedFile("brand.png", VALID_PNG, content_type="image/png")
+        response2 = self.client.post(
+            self.list_url,
+            {"title": "ab", "description": "Valid description", "product_image": f2},
+            format="multipart",
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Title must be at least 3 characters long.", response2.data["message"])
+
+    def test_create_brand_new_description_validation(self, mock_upload):
+        self.client.force_authenticate(user=self.user)
+        f = SimpleUploadedFile("brand.png", VALID_PNG, content_type="image/png")
+        response = self.client.post(
+            self.list_url,
+            {"title": "Valid Title", "description": "   ", "product_image": f},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(
+            "This field may not be blank." in response.data["message"]
+            or "Description cannot be blank" in response.data["message"]
+        )
+
+    def test_create_brand_new_image_validation(self, mock_upload):
+        self.client.force_authenticate(user=self.user)
+
+        # Image exceeding 10 MB limit (valid PNG structure with > 10MB payload)
+        large_bytes = VALID_PNG + (b"0" * (10 * 1024 * 1024 + 1))
+        oversized = SimpleUploadedFile("huge.png", large_bytes, content_type="image/png")
+        response = self.client.post(
+            self.list_url,
+            {"title": "Valid Title", "description": "Valid description", "product_image": oversized},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Image size cannot exceed 10MB.", response.data["message"])
+
+        # Invalid file extension (valid image content with unsupported extension like .gif or .pdf)
+        bad_ext = SimpleUploadedFile("photo.gif", VALID_PNG, content_type="image/gif")
+        response2 = self.client.post(
+            self.list_url,
+            {"title": "Valid Title", "description": "Valid description", "product_image": bad_ext},
+            format="multipart",
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Only JPG, JPEG, PNG, or WEBP image formats are allowed.", response2.data["message"])
+
+    def test_retrieve_brand_new_detail_and_not_found(self, mock_upload):
+        item = BrandNew.objects.create(
+            title="Vintage Boots",
+            description="Classic leather boots.",
+            product_image="brand_new/products/boots.png",
+        )
+        detail_url = f"/api/v1/brand-new/{item.pk}/"
+
+        # Detail retrieve as anonymous
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], item.pk)
+        self.assertEqual(response.data["title"], "Vintage Boots")
+        self.assertEqual(response.data["description"], "Classic leather boots.")
+
+        # Not found
+        response_404 = self.client.get("/api/v1/brand-new/999999/")
+        self.assertEqual(response_404.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_update_brand_new_put_and_patch(self, mock_upload):
+        item = BrandNew.objects.create(
+            title="Original Title",
+            description="Original description",
+            product_image="brand_new/products/orig.png",
+        )
+        detail_url = f"/api/v1/brand-new/{item.pk}/"
+
+        # Unauthenticated PUT fails
+        response = self.client.put(detail_url, {"title": "Updated"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # Authenticated PATCH succeeds
+        self.client.force_authenticate(user=self.user)
+        response_patch = self.client.patch(detail_url, {"title": "Updated Brand Title"}, format="json")
+        self.assertEqual(response_patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_patch.data["title"], "Updated Brand Title")
+        item.refresh_from_db()
+        self.assertEqual(item.title, "Updated Brand Title")
+
+        # Authenticated PUT with image succeeds
+        new_img = SimpleUploadedFile("updated.jpg", VALID_JPEG, content_type="image/jpeg")
+        response_put = self.client.put(
+            detail_url,
+            {"title": "Completely New Title", "description": "Completely new description", "product_image": new_img},
+            format="multipart",
+        )
+        self.assertEqual(response_put.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_put.data["title"], "Completely New Title")
+
+    def test_delete_brand_new(self, mock_upload):
+        item = BrandNew.objects.create(
+            title="To Be Deleted",
+            description="Will be removed",
+            product_image="brand_new/products/del.png",
+        )
+        detail_url = f"/api/v1/brand-new/{item.pk}/"
+
+        # Unauthenticated DELETE fails
+        response = self.client.delete(detail_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(BrandNew.objects.filter(pk=item.pk).exists())
+
+        # Authenticated DELETE succeeds
+        self.client.force_authenticate(user=self.user)
+        response_del = self.client.delete(detail_url)
+        self.assertEqual(response_del.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(BrandNew.objects.filter(pk=item.pk).exists())
+
+    def test_site_settings_endpoint_preserved(self, mock_upload):
+        response = self.client.get(self.settings_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

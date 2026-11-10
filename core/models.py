@@ -27,3 +27,20 @@ class SiteSettings(SingletonModel):
 
     def __str__(self):
         return "Site Settings"
+
+
+class BrandNew(models.Model):
+    product_image = models.ImageField(upload_to="brand_new/products/", max_length=500)
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Brand New"
+        verbose_name_plural = "Brand New"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.title
