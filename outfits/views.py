@@ -40,6 +40,7 @@ from .serializers import (
     SavedOutfitUpdateSerializer,
     TodayOutfitSerializer,
     TryOnCreateSerializer,
+    get_avatar_original_image,
 )
 from .services import (
     get_or_create_today_auto_job,
@@ -131,6 +132,8 @@ class TryOnCreateView(generics.ListCreateAPIView):
                 status_code=502,
             )
 
+        orig_img_url = get_avatar_original_image(avatar, request)
+
         response_data = {
             "status": "success",
             "code": status.HTTP_201_CREATED,
@@ -141,6 +144,7 @@ class TryOnCreateView(generics.ListCreateAPIView):
                 "avatar": avatar.id,
                 "wardrobe_items": [item.id for item in items],
                 "result_image": job.result_image.url if job.result_image else None,
+                "original_image": orig_img_url,
             },
         }
         return Response(response_data, status=status.HTTP_201_CREATED)
@@ -170,9 +174,12 @@ class TryOnStatusView(generics.RetrieveAPIView):
         if job.status == JobStatus.DONE:
             result_image_url = job.display_result_image or None
 
+        original_image_url = get_avatar_original_image(job.avatar, request)
+
         return Response({
             "status": job.status,
             "result_image": result_image_url,
+            "original_image": original_image_url,
             "error_message": job.error_message if job.status == JobStatus.FAILED else "",
         }, status=status.HTTP_200_OK)
 
