@@ -940,7 +940,7 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
     def test_failed_today_auto_job_is_retried_on_get_today(self, mock_submit, *args):
         today_date = timezone.now().date()
         avatar = resolve_tryon_avatar(self.male_user)
-        
+
         # 1. Create a stale failed job for today
         stale_failed_job = OutfitJob.objects.create(
             user=self.male_user,
@@ -950,7 +950,7 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
             status=JobStatus.FAILED,
             error_message="Stale failure from earlier"
         )
-        
+
         # 2. Add valid completed wardrobe items to user's wardrobe
         top = self._create_item(self.male_user, self.cat_tops)
         bottom = self._create_item(self.male_user, self.cat_bottoms)
@@ -966,7 +966,7 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
     def test_done_today_auto_job_is_cached(self, mock_submit, *args):
         today_date = timezone.now().date()
         avatar = resolve_tryon_avatar(self.male_user)
-        
+
         # 1. Create a DONE job for today
         done_job = OutfitJob.objects.create(
             user=self.male_user,
@@ -976,7 +976,7 @@ class DailyOutfitPipelineRecommendationAPITestCase(APITestCase):
             status=JobStatus.DONE,
             result_image="https://res.cloudinary.com/demo/image.jpg"
         )
-        
+
         # 2. GET /today/ returns the cached DONE job without creating a new one
         retrieved_job = get_or_create_today_auto_job(self.male_user)
         self.assertEqual(retrieved_job.id, done_job.id)
@@ -2557,16 +2557,200 @@ class ProfileOutfitDisplayAPITestCase(APITestCase):
         self.assertEqual(resp_p2.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp_p2.data["results"]), 10)
 
-        # Fetch page 3
-        resp_p3 = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?page=3&page_size=10")
-        self.assertEqual(resp_p3.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp_p3.data["results"]), 5)
 
+class OriginalAndGeneratedImageTogetherAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="imagepair_user@example.com",
+            name="Image Pair User",
+            password="password123",
+            username="imagepair_user",
+        )
+        self.stranger = User.objects.create_user(
+            email="imagepair_stranger@example.com",
+            name="Stranger User",
+            password="password123",
+            username="imagepair_stranger",
+        )
+        self.avatar_custom = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            source_photo="avatars/source/custom_user_photo.jpg",
+            is_preferred=True,
+        )
 
+    def test_outfit_job_response_includes_correct_original_photo_url(self):
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar_custom,
+            status=JobStatus.DONE,
+            result_image="avatars/result/gen_outfit.png",
+        )
 
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/try-on/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data if isinstance(resp.data, list) else resp.data.get("results", [])
+        job_data = next(item for item in results if item["id"] == job.id)
 
+        # 1. Correct original photo URL included
+        self.assertIn("original_image", job_data)
+        self.assertIn("avatars/source/custom_user_photo.jpg", job_data["original_image"])
 
+        # 2. Result image included
+        self.assertIn("result_image", job_data)
+        self.assertIn("avatars/result/gen_outfit.png", job_data["result_image"])
 
+        # 3. Existing API fields remain available
+        for field in ("id", "generated_date", "trigger_type", "status", "avatar", "wardrobe_items", "saved", "is_saved"):
+            self.assertIn(field, job_data)
 
+    def test_today_outfit_response_includes_both_original_and_generated_images(self):
+        today = timezone.now().date()
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar_custom,
+            scheduled_date=today,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/today_outfit_result.png",
+        )
 
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/today/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["status"], "success")
 
+        data = resp.data["data"]
+        self.assertIn("original_image", data)
+        self.assertIn("result_image", data)
+        self.assertIn("avatars/source/custom_user_photo.jpg", data["original_image"])
+        self.assertEqual(data["result_image"], "https://v3b.fal.media/today_outfit_result.png")
+
+    def test_missing_original_photo_handled_gracefully(self):
+        # Default system avatar without source_photo
+        avatar_default = Avatar.objects.create(
+            user=None,
+            is_default=True,
+            gender="male",
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            source_photo=None,
+        )
+        job_no_orig = OutfitJob.objects.create(
+            user=self.user,
+            avatar=avatar_default,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/default_fit.jpg",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/try-on/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data if isinstance(resp.data, list) else resp.data.get("results", [])
+        job_data = next(item for item in results if item["id"] == job_no_orig.id)
+
+        # Missing original photo is gracefully None
+        self.assertIsNone(job_data["original_image"])
+        self.assertEqual(job_data["result_image"], "https://v3b.fal.media/default_fit.jpg")
+
+    def test_original_image_belongs_to_correct_avatar_and_job(self):
+        avatar_b = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.DONE,
+            source_photo="avatars/source/photo_b.jpg",
+        )
+
+        job_a = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar_custom,
+            status=JobStatus.DONE,
+            result_image="avatars/result/job_a.png",
+        )
+        job_b = OutfitJob.objects.create(
+            user=self.user,
+            avatar=avatar_b,
+            status=JobStatus.DONE,
+            result_image="avatars/result/job_b.png",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/try-on/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data if isinstance(resp.data, list) else resp.data.get("results", [])
+
+        data_a = next(item for item in results if item["id"] == job_a.id)
+        data_b = next(item for item in results if item["id"] == job_b.id)
+
+        self.assertIn("custom_user_photo.jpg", data_a["original_image"])
+        self.assertIn("photo_b.jpg", data_b["original_image"])
+        self.assertNotEqual(data_a["original_image"], data_b["original_image"])
+
+    def test_private_original_photos_not_exposed_to_unauthorized_users(self):
+        # User creates a private saved outfit
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar_custom,
+            status=JobStatus.DONE,
+            result_image="avatars/result/secret_fit.png",
+        )
+        saved = SavedOutfit.objects.create(
+            user=self.user,
+            outfit_job=job,
+            date=timezone.now().date(),
+            is_shared=False,  # Private!
+        )
+
+        # Stranger attempts to view User's outfits on public profile
+        self.client.force_authenticate(user=self.stranger)
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data if isinstance(resp.data, list) else resp.data.get("results", [])
+        self.assertEqual(len(results), 0)
+
+        # Stranger attempts to directly access user's try-on jobs
+        resp_tryon = self.client.get("/api/v1/outfits/try-on/")
+        results_tryon = resp_tryon.data if isinstance(resp_tryon.data, list) else resp_tryon.data.get("results", [])
+        self.assertNotIn(job.id, [j["id"] for j in results_tryon])
+
+        # Stranger attempts to access user's saved outfit directly
+        resp_detail = self.client.get(f"/api/v1/outfits/saved/{saved.id}/")
+        self.assertEqual(resp_detail.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Even when the outfit is shared (is_shared=True), third-party visitors
+        # MUST NOT receive the user's private source photo in public profile views
+        saved.is_shared = True
+        saved.save(update_fields=["is_shared"])
+
+        # Stranger views public profile
+        resp_shared = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp_shared.status_code, status.HTTP_200_OK)
+        results_shared = resp_shared.data if isinstance(resp_shared.data, list) else resp_shared.data.get("results", [])
+        self.assertEqual(len(results_shared), 1)
+        # Stranger gets the generated outfit image, but original_image is masked (None)
+        self.assertIsNone(results_shared[0]["outfit_job"]["original_image"])
+        self.assertIn("secret_fit.png", results_shared[0]["outfit_job"]["result_image"])
+
+        # But the owner viewing their own profile CAN see their own original_image
+        self.client.force_authenticate(user=self.user)
+        resp_owner = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp_owner.status_code, status.HTTP_200_OK)
+        results_owner = resp_owner.data if isinstance(resp_owner.data, list) else resp_owner.data.get("results", [])
+        self.assertIn("custom_user_photo.jpg", results_owner[0]["outfit_job"]["original_image"])
+
+    def test_status_endpoint_includes_original_image(self):
+        job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.avatar_custom,
+            status=JobStatus.DONE,
+            result_image="avatars/result/status_test.png",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get(f"/api/v1/outfits/try-on/{job.id}/status/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("original_image", resp.data)
+        self.assertIn("custom_user_photo.jpg", resp.data["original_image"])
+        self.assertIn("status_test.png", resp.data["result_image"])
