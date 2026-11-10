@@ -443,6 +443,19 @@ def _parse_month_date_range(query_params):
     return start_date, end_date
 
 
+def with_rating_aggregates(queryset):
+    """
+    Annotate a SavedOutfit queryset with ratings_count and per-category averages
+    (avg_<category>) in one query, so listing outfits stays N+1-free.
+    Public-facing only — never exposes who rated what (see
+    SavedOutfitRatingsListView for the owner-only per-rater breakdown).
+    """
+    annotations = {"ratings_count": Count("ratings", distinct=True)}
+    for field in RATING_CATEGORIES:
+        annotations[f"avg_{field}"] = Avg(f"ratings__{field}")
+    return queryset.annotate(**annotations)
+
+
 class SavedOutfitListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
@@ -468,7 +481,8 @@ class SavedOutfitListCreateView(generics.ListCreateAPIView):
             s_date, e_date = _parse_month_date_range(self.request.query_params)
             qs = qs.filter(date__range=(s_date, e_date))
 
-        return qs
+        qs = qs.order_by("-date", "-created_at")
+        return with_rating_aggregates(qs)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -478,9 +492,11 @@ class SavedOutfitListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         read_serializer = SavedOutfitSerializer(
-            SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
-            .prefetch_related("outfit_job__wardrobe_items")
-            .get(pk=serializer.instance.pk),
+            with_rating_aggregates(
+                SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
+                .prefetch_related("outfit_job__wardrobe_items")
+                .filter(pk=serializer.instance.pk)
+            ).first(),
             context=self.get_serializer_context(),
         )
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
@@ -495,7 +511,7 @@ class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
         return SavedOutfitSerializer
 
     def get_queryset(self):
-        return (
+        return with_rating_aggregates(
             SavedOutfit.objects.filter(user=self.request.user)
             .select_related("outfit_job", "outfit_job__avatar")
             .prefetch_related("outfit_job__wardrobe_items")
@@ -509,9 +525,11 @@ class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
         self.perform_update(serializer)
         instance.refresh_from_db()
         read_serializer = SavedOutfitSerializer(
-            SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
-            .prefetch_related("outfit_job__wardrobe_items")
-            .get(pk=instance.pk),
+            with_rating_aggregates(
+                SavedOutfit.objects.select_related("outfit_job", "outfit_job__avatar")
+                .prefetch_related("outfit_job__wardrobe_items")
+                .filter(pk=instance.pk)
+            ).first(),
             context=self.get_serializer_context(),
         )
         return Response(read_serializer.data)
@@ -525,24 +543,14 @@ class SavedOutfitDetailView(generics.RetrieveUpdateDestroyAPIView):
         )
 
 
-def with_rating_aggregates(queryset):
-    """
-    Annotate a SavedOutfit queryset with ratings_count and per-category averages
-    (avg_<category>) in one query, so listing shared outfits stays N+1-free.
-    Public-facing only — never exposes who rated what (see
-    SavedOutfitRatingsListView for the owner-only per-rater breakdown).
-    """
-    annotations = {"ratings_count": Count("ratings", distinct=True)}
-    for field in RATING_CATEGORIES:
-        annotations[f"avg_{field}"] = Avg(f"ratings__{field}")
-    return queryset.annotate(**annotations)
-
-
 class PublicSavedOutfitListView(generics.ListAPIView):
     """
-    GET /api/v1/outfits/public/<username>/ - a user's saved outfits that they've
-    marked as shared (is_shared=True), for display on their public profile.
-    Shows only the aggregate rating (count/average/breakdown) — not who rated it.
+    GET /api/v1/outfits/public/<username>/ - a user's saved outfits for display on their profile.
+    When viewed by the profile owner, displays all of the user's saved outfits (both shared
+    and private) so that all generated/saved outfits appear on the owner's profile.
+    Supports optional ?is_shared=true or ?is_shared=false query parameter.
+    When viewed by third-party visitors, strictly returns only shared outfits (is_shared=True).
+    Shows aggregate ratings (count/average/breakdown).
     """
 
     permission_classes = [IsAuthenticated]
@@ -550,13 +558,31 @@ class PublicSavedOutfitListView(generics.ListAPIView):
     pagination_class = StandardPagination
 
     def get_queryset(self):
-        get_object_or_404(User, username=self.kwargs["username"], is_active=True)
+        target_username = self.kwargs["username"]
+        target_user = get_object_or_404(User, username=target_username, is_active=True)
+
+        is_owner = (
+            self.request.user.is_authenticated
+            and self.request.user.pk == target_user.pk
+        )
+
         qs = (
-            SavedOutfit.objects.filter(user__username=self.kwargs["username"], is_shared=True)
+            SavedOutfit.objects.filter(user=target_user)
             .select_related("outfit_job", "outfit_job__avatar")
             .prefetch_related("outfit_job__wardrobe_items")
-            .order_by("-date")
         )
+
+        if not is_owner:
+            qs = qs.filter(is_shared=True)
+        else:
+            is_shared_param = self.request.query_params.get("is_shared")
+            if is_shared_param is not None:
+                if is_shared_param.lower() in ("true", "1"):
+                    qs = qs.filter(is_shared=True)
+                elif is_shared_param.lower() in ("false", "0"):
+                    qs = qs.filter(is_shared=False)
+
+        qs = qs.order_by("-date", "-created_at")
         return with_rating_aggregates(qs)
 
 
