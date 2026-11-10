@@ -6,6 +6,8 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.validators import RestrictedImageField
+
 from .models import MAX_AESTHETICS_PER_PROFILE, Aesthetic, CustomerProfile, OTP, PasswordResetToken, User
 from .utils import send_otp_email
 
@@ -25,6 +27,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
+    profile_image = RestrictedImageField(required=False, allow_null=True)
+
     class Meta:
         model = User
         fields = ("name", "profile_image")
@@ -48,7 +52,7 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
         required=False,
     )
     # Writable fields that map to the related User model
-    profile_image = serializers.ImageField(required=False, allow_null=True)
+    profile_image = RestrictedImageField(required=False, allow_null=True)
     name = serializers.CharField(required=False, max_length=150)
 
     class Meta:
