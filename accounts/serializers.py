@@ -1,4 +1,5 @@
 import json
+import logging
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -7,6 +8,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import MAX_AESTHETICS_PER_PROFILE, Aesthetic, CustomerProfile, OTP, PasswordResetToken, User
 from .utils import send_otp_email
+
+logger = logging.getLogger(__name__)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -159,7 +162,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ("name", "email", "password")
 
     def validate_email(self, value):
-        value = User.objects.normalize_email(value)
+        value = User.objects.normalize_email(value).strip().lower()
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("An account with this email already exists.")
         return value
@@ -234,10 +237,31 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and "email" in data and isinstance(data["email"], str):
+            data = data.copy()
+            data["email"] = data["email"].strip()
+        return super().to_internal_value(data)
+
     def validate(self, attrs):
+        raw_email = (attrs.get("email") or "").strip()
+        matched_users = list(User.objects.filter(email__iexact=raw_email)[:2])
+
+        if len(matched_users) == 1:
+            lookup_username = matched_users[0].email
+        elif len(matched_users) > 1:
+            exact_match = next((u for u in matched_users if u.email == raw_email), None)
+            if exact_match:
+                lookup_username = exact_match.email
+            else:
+                logger.warning("Ambiguous email collision detected during login attempt.")
+                raise serializers.ValidationError({"detail": "Invalid email or password."})
+        else:
+            lookup_username = raw_email
+
         user = authenticate(
             request=self.context.get("request"),
-            username=attrs["email"],
+            username=lookup_username,
             password=attrs["password"],
         )
         if not user:
