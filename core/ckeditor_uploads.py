@@ -7,6 +7,8 @@ from django_ckeditor_5.permissions import check_upload_permission
 from django_ckeditor_5.storage_utils import handle_uploaded_file
 from PIL import Image
 
+from core.validators import validate_image_file_size
+
 
 def _image_verify(f):
     try:
@@ -23,12 +25,20 @@ def _image_verify(f):
 @require_POST
 @check_upload_permission
 def upload_file(request):
+    upload_file_obj = request.FILES.get("upload")
+    if upload_file_obj:
+        try:
+            validate_image_file_size(upload_file_obj)
+        except Exception as ex:
+            msg = ex.detail[0] if hasattr(ex, "detail") and isinstance(ex.detail, list) else str(ex)
+            return JsonResponse({"error": {"message": str(msg)}}, status=400)
+
     form = UploadFileForm(request.POST, request.FILES)
     allow_all_file_types = getattr(settings, "CKEDITOR_5_ALLOW_ALL_FILE_TYPES", False)
 
-    if not allow_all_file_types:
+    if not allow_all_file_types and upload_file_obj:
         try:
-            _image_verify(request.FILES["upload"])
+            _image_verify(upload_file_obj)
         except NoImageException as ex:
             return JsonResponse({"error": {"message": f"{ex}"}}, status=400)
 
