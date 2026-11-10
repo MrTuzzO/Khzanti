@@ -483,3 +483,94 @@ class SaveFriendOutfitAPITestCase(APITestCase):
         url = f"/api/v1/feed/friends-style/save/{job_pending.id}/"
         res = self.client.post(url)
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class MultiUserFeedPostRatingFlowTestCase(APITestCase):
+    """
+    Issue 5: Multi-user rating handling, duplicate updates, rating calculations,
+    and out-of-bounds rejection for feed posts (RatePostView).
+    """
+
+    def setUp(self):
+        self.creator = User.objects.create_user(
+            email="creator@example.com",
+            username="creator",
+            password="Password123!",
+            name="Post Creator",
+        )
+        self.user_a = User.objects.create_user(
+            email="rater_a@example.com",
+            username="rater_a",
+            password="Password123!",
+            name="Rater A",
+        )
+        self.user_b = User.objects.create_user(
+            email="rater_b@example.com",
+            username="rater_b",
+            password="Password123!",
+            name="Rater B",
+        )
+        self.post = Post.objects.create(
+            user=self.creator,
+            caption="Test Post for Ratings",
+            privacy="public",
+        )
+
+    def test_post_multi_user_rating_and_update(self):
+        url = f"/api/v1/feed/posts/{self.post.id}/rate/"
+
+        # 1. User A rates post -> 201 Created
+        self.client.force_authenticate(user=self.user_a)
+        res_a = self.client.post(url, {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8})
+        self.assertEqual(res_a.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_a.data["color_harmony"], 8)
+
+        # 2. User B rates post -> 201 Created
+        self.client.force_authenticate(user=self.user_b)
+        res_b = self.client.post(url, {"color_harmony": 6, "trendy": 6, "overall_matching": 6, "accessories": 6})
+        self.assertEqual(res_b.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(PostRating.objects.filter(post=self.post).count(), 2)
+
+        # 3. User A rates post again -> 200 OK (update, NOT duplicate)
+        self.client.force_authenticate(user=self.user_a)
+        res_a2 = self.client.post(url, {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10})
+        self.assertEqual(res_a2.status_code, status.HTTP_200_OK)
+
+        # Total rows must remain 2
+        self.assertEqual(PostRating.objects.filter(post=self.post).count(), 2)
+        rating_a = PostRating.objects.get(post=self.post, rater=self.user_a)
+        self.assertEqual(rating_a.color_harmony, 10)
+
+    def test_post_rating_out_of_bounds_rejected(self):
+        url = f"/api/v1/feed/posts/{self.post.id}/rate/"
+        self.client.force_authenticate(user=self.user_a)
+
+        # Value > 10 rejected
+        res_high = self.client.post(url, {"color_harmony": 12, "trendy": 5, "overall_matching": 5, "accessories": 5})
+        self.assertEqual(res_high.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Value < 0 rejected
+        res_low = self.client.post(url, {"color_harmony": -2, "trendy": 5, "overall_matching": 5, "accessories": 5})
+        self.assertEqual(res_low.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_post_rating_incomplete_submission_rejected(self):
+        """Omitted rating fields are rejected with 400 Bad Request per API contract."""
+        url = f"/api/v1/feed/posts/{self.post.id}/rate/"
+        self.client.force_authenticate(user=self.user_a)
+
+        # Missing 'trendy', 'overall_matching', 'accessories'
+        res_incomplete = self.client.post(url, {"color_harmony": 8})
+        self.assertEqual(res_incomplete.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("This field is required", str(res_incomplete.data))
+
+    def test_post_rating_delete(self):
+        url = f"/api/v1/feed/posts/{self.post.id}/rate/"
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post(url, {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8})
+
+        self.assertEqual(PostRating.objects.filter(post=self.post).count(), 1)
+
+        # Delete rating
+        res_del = self.client.delete(url)
+        self.assertEqual(res_del.status_code, status.HTTP_200_OK)
+        self.assertEqual(PostRating.objects.filter(post=self.post).count(), 0)
