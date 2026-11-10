@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 
 from avatars.models import Avatar
-from outfits.models import DailyOutfitSelection, JobStatus, OutfitJob, SavedOutfit, TriggerType
+from outfits.models import DailyOutfitSelection, JobStatus, OutfitJob, OutfitRating, SavedOutfit, TriggerType
 from outfits.services import build_try_on_prompt
 from wardrobe.models import Category
 from wardrobe_items_ai.models import ItemAnalysis, WardrobeItem
@@ -2317,6 +2317,251 @@ class AutoDailyWardrobeUsabilityRegressionTestCase(APITestCase):
             )
         )
         self.assertTrue(bool(auto_job.reasoning_note))
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class ProfileOutfitDisplayAPITestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="alice_profile@example.com",
+            name="Alice Profile",
+            username="alice",
+            password="password123",
+        )
+        self.visitor = User.objects.create_user(
+            email="bob_visitor@example.com",
+            name="Bob Visitor",
+            username="bob",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.avatar = Avatar.objects.create(
+            user=self.user,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/alice_avatar.png",
+            is_saved=True,
+        )
+
+        self.category, _ = Category.objects.get_or_create(name="Tops")
+        self.dummy_image = SimpleUploadedFile(
+            name="item.png",
+            content=VALID_PNG_BYTES,
+            content_type="image/png",
+        )
+        self.wardrobe_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.category,
+            image=self.dummy_image,
+        )
+
+    def _create_outfit(self, user, scheduled_date, is_shared=False, note="Outfit Note"):
+        job = OutfitJob.objects.create(
+            user=user,
+            avatar=self.avatar,
+            scheduled_date=scheduled_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url=f"https://v3b.fal.media/outfit_{scheduled_date}.png",
+            is_saved=True,
+        )
+        job.wardrobe_items.add(self.wardrobe_item)
+        saved = SavedOutfit.objects.create(
+            user=user,
+            outfit_job=job,
+            date=scheduled_date,
+            note=note,
+            is_shared=is_shared,
+        )
+        return saved
+
+    def test_owner_sees_all_generated_and_saved_outfits_on_profile(self, mock_cloud):
+        today = timezone.now().date()
+        outfit_today = self._create_outfit(self.user, today, is_shared=False, note="Today private")
+        outfit_yesterday = self._create_outfit(self.user, today - timedelta(days=1), is_shared=True, note="Yesterday shared")
+        outfit_older = self._create_outfit(self.user, today - timedelta(days=5), is_shared=False, note="Older private")
+
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        data = resp.data
+        self.assertEqual(data["count"], 3)
+        results = data["results"]
+        self.assertEqual(len(results), 3)
+
+        result_ids = [item["id"] for item in results]
+        self.assertEqual(result_ids, [outfit_today.id, outfit_yesterday.id, outfit_older.id])
+
+        # Verify posting date is present and clearly displayed
+        self.assertEqual(results[0]["saved_date"], today.isoformat())
+        self.assertTrue(bool(results[0]["created_at"]))
+        self.assertFalse(results[0]["is_shared"])
+        self.assertTrue(results[1]["is_shared"])
+
+    def test_visitor_only_sees_shared_outfits_on_profile(self, mock_cloud):
+        today = timezone.now().date()
+        self._create_outfit(self.user, today, is_shared=False, note="Alice private today")
+        shared_outfit = self._create_outfit(self.user, today - timedelta(days=1), is_shared=True, note="Alice shared yesterday")
+        self._create_outfit(self.user, today - timedelta(days=5), is_shared=False, note="Alice private older")
+
+        # Authenticate as Bob (visitor)
+        self.client.force_authenticate(user=self.visitor)
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        data = resp.data
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(len(data["results"]), 1)
+        self.assertEqual(data["results"][0]["id"], shared_outfit.id)
+        self.assertEqual(data["results"][0]["saved_date"], (today - timedelta(days=1)).isoformat())
+
+    def test_visitor_cannot_access_private_outfits_via_query_params(self, mock_cloud):
+        today = timezone.now().date()
+        self._create_outfit(self.user, today, is_shared=False, note="Alice private")
+        shared = self._create_outfit(self.user, today - timedelta(days=1), is_shared=True, note="Alice shared")
+
+        # Authenticate as Bob (visitor)
+        self.client.force_authenticate(user=self.visitor)
+
+        # Attempt to pass ?is_shared=false
+        resp_false = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?is_shared=false")
+        self.assertEqual(resp_false.status_code, status.HTTP_200_OK)
+        # Must still strictly return only shared outfits (never private)
+        self.assertEqual(resp_false.data["count"], 1)
+        self.assertEqual(resp_false.data["results"][0]["id"], shared.id)
+
+        # Attempt to pass ?is_shared=0
+        resp_zero = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?is_shared=0")
+        self.assertEqual(resp_zero.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_zero.data["count"], 1)
+        self.assertEqual(resp_zero.data["results"][0]["id"], shared.id)
+
+    def test_unauthenticated_request_rejected(self, mock_cloud):
+        self.client.logout()
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_nonexistent_user_returns_404(self, mock_cloud):
+        resp = self.client.get("/api/v1/outfits/public/nonexistent_user_12345/")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_owner_can_filter_shared_status_on_profile(self, mock_cloud):
+        today = timezone.now().date()
+        self._create_outfit(self.user, today, is_shared=False)
+        self._create_outfit(self.user, today - timedelta(days=1), is_shared=True)
+        self._create_outfit(self.user, today - timedelta(days=2), is_shared=False)
+
+        # Filter ?is_shared=true
+        resp_shared = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?is_shared=true")
+        self.assertEqual(resp_shared.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_shared.data["count"], 1)
+
+        # Filter ?is_shared=false
+        resp_private = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?is_shared=false")
+        self.assertEqual(resp_private.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_private.data["count"], 2)
+
+    def test_profile_outfits_include_rating_aggregates(self, mock_cloud):
+        today = timezone.now().date()
+        rated_outfit = self._create_outfit(self.user, today, is_shared=True)
+        unrated_outfit = self._create_outfit(self.user, today - timedelta(days=1), is_shared=False)
+
+        OutfitRating.objects.create(
+            saved_outfit=rated_outfit,
+            rater=self.visitor,
+            color_harmony=8,
+            trendy=9,
+            overall_matching=7,
+            accessories=8,
+        )
+
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        results = resp.data["results"]
+        rated_item = next(item for item in results if item["id"] == rated_outfit.id)
+        unrated_item = next(item for item in results if item["id"] == unrated_outfit.id)
+
+        # Rated item checks
+        self.assertEqual(rated_item["ratings_count"], 1)
+        self.assertEqual(rated_item["average_rating"], 8.0)
+        self.assertEqual(
+            rated_item["rating_breakdown"],
+            {
+                "color_harmony": 8.0,
+                "trendy": 9.0,
+                "overall_matching": 7.0,
+                "accessories": 8.0,
+            },
+        )
+        self.assertEqual(rated_item["saved_date"], today.isoformat())
+
+        # Unrated item checks
+        self.assertEqual(unrated_item["ratings_count"], 0)
+        self.assertIsNone(unrated_item["average_rating"])
+        self.assertEqual(
+            unrated_item["rating_breakdown"],
+            {
+                "color_harmony": None,
+                "trendy": None,
+                "overall_matching": None,
+                "accessories": None,
+            },
+        )
+
+    def test_saved_outfit_list_includes_ratings_and_dates(self, mock_cloud):
+        today = timezone.now().date()
+        outfit = self._create_outfit(self.user, today, is_shared=True)
+        OutfitRating.objects.create(
+            saved_outfit=outfit,
+            rater=self.visitor,
+            color_harmony=10,
+            trendy=10,
+            overall_matching=10,
+            accessories=10,
+        )
+
+        resp = self.client.get("/api/v1/outfits/saved/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data), 1)
+
+        item = resp.data[0]
+        self.assertEqual(item["id"], outfit.id)
+        self.assertEqual(item["saved_date"], today.isoformat())
+        self.assertEqual(item["ratings_count"], 1)
+        self.assertEqual(item["average_rating"], 10.0)
+        self.assertEqual(
+            item["rating_breakdown"],
+            {
+                "color_harmony": 10.0,
+                "trendy": 10.0,
+                "overall_matching": 10.0,
+                "accessories": 10.0,
+            },
+        )
+
+    def test_pagination_on_profile_outfits(self, mock_cloud):
+        today = timezone.now().date()
+        for i in range(25):
+            self._create_outfit(self.user, today - timedelta(days=i), is_shared=True)
+
+        resp = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?page_size=10")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["count"], 25)
+        self.assertEqual(len(resp.data["results"]), 10)
+        self.assertIsNotNone(resp.data["next"])
+
+        # Fetch page 2
+        resp_p2 = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?page=2&page_size=10")
+        self.assertEqual(resp_p2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp_p2.data["results"]), 10)
+
+        # Fetch page 3
+        resp_p3 = self.client.get(f"/api/v1/outfits/public/{self.user.username}/?page=3&page_size=10")
+        self.assertEqual(resp_p3.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp_p3.data["results"]), 5)
+
 
 
 
