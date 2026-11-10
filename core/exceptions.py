@@ -113,7 +113,7 @@ def _extract_message(exc, data):
 
                 if path:
                     nested_label = " → ".join(
-                        p.replace("_", " ").capitalize() for p in path
+                        str(p).replace("_", " ").capitalize() for p in path
                     )
                     return f"{field_label} → {nested_label}: {first}"
 
