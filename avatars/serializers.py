@@ -2,6 +2,12 @@ import os
 import uuid
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+
+from core.validators import (
+    RestrictedImageField,
+    validate_image_extension,
+    validate_image_file_size,
+)
 from .models import Avatar
 
 
@@ -23,7 +29,7 @@ class NullableScalarModelSerializerMixin:
 
 
 class AvatarCreateSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
-    source_photo = serializers.ImageField(required=True)
+    source_photo = RestrictedImageField(required=True)
     style = serializers.ChoiceField(
         choices=Avatar.Style.choices,
         default=Avatar.Style.REALISTIC,
@@ -36,6 +42,8 @@ class AvatarCreateSerializer(NullableScalarModelSerializerMixin, serializers.Mod
         read_only_fields = ["id"]
 
     def validate_source_photo(self, value):
+        validate_image_file_size(value)
+        validate_image_extension(value)
         # The DB column for source_photo is varchar(100) and upload_to
         # prepends "avatars/source/" (15 chars), so long original filenames
         # (common from phone cameras/WhatsApp) can overflow it and raise a
@@ -48,7 +56,7 @@ class AvatarCreateSerializer(NullableScalarModelSerializerMixin, serializers.Mod
 class SystemDefaultAvatarAdminSerializer(serializers.Serializer):
     gender = serializers.ChoiceField(choices=["male", "female"], required=True)
     style = serializers.ChoiceField(choices=Avatar.Style.choices, required=True)
-    image = serializers.ImageField(required=True)
+    image = RestrictedImageField(required=True)
 
 
 class AvatarSerializer(NullableScalarModelSerializerMixin, serializers.ModelSerializer):
