@@ -23,7 +23,11 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_is_profile_completed(self, obj) -> bool:
-        return getattr(getattr(obj, "customer_profile", None), "is_completed", False)
+        try:
+            profile = getattr(obj, "customer_profile", None)
+            return bool(getattr(profile, "is_completed", False))
+        except Exception:
+            return False
 
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
