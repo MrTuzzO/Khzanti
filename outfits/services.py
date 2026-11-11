@@ -160,13 +160,18 @@ async def submit_try_on_job_async(job: OutfitJob) -> OutfitJob:
         job.fal_request_id = handle.request_id
         job.status = JobStatus.PROCESSING
         job.error_message = ""
-        job.internal_error_detail = ""
+        is_auto_rep = bool(job.internal_error_detail and job.internal_error_detail.startswith("auto_replacement:"))
+        if not is_auto_rep:
+            job.internal_error_detail = ""
         await job.asave(update_fields=["fal_request_id", "status", "error_message", "internal_error_detail", "updated_at"])
     except Exception as exc:
         raw_error = str(exc)
         logger.error("[OUTFITS TRY-ON] Submission failed for OutfitJob %s: %s", job.id, raw_error, exc_info=True)
         job.status = JobStatus.FAILED
-        job.internal_error_detail = raw_error
+        if job.internal_error_detail and "auto_replacement:" in job.internal_error_detail:
+            job.internal_error_detail = f"auto_replacement:{job.avatar_id}:{raw_error}"
+        else:
+            job.internal_error_detail = raw_error
         job.error_message = _friendly_error_message(raw_error)
         await job.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
 
@@ -213,13 +218,20 @@ def sync_outfit_job_status(job: OutfitJob) -> OutfitJob:
             job.status = JobStatus.DONE
             job.is_saved = False
             job.error_message = ""
-            job.internal_error_detail = ""
+            is_auto_replacement = bool(job.internal_error_detail and job.internal_error_detail.startswith("auto_replacement:"))
+            if not is_auto_replacement:
+                job.internal_error_detail = ""
             job.save(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
+            if is_auto_replacement:
+                job = apply_auto_replacement_to_today_job(job)
     except Exception as exc:
         raw_error = str(exc)
         logger.error("OutfitJob %s status sync failed: %s", job.id, raw_error, exc_info=True)
         job.status = JobStatus.FAILED
-        job.internal_error_detail = raw_error
+        if job.internal_error_detail and "auto_replacement:" in job.internal_error_detail:
+            job.internal_error_detail = f"auto_replacement:{job.avatar_id}:{raw_error}"
+        else:
+            job.internal_error_detail = raw_error
         job.error_message = _friendly_error_message(raw_error)
         job.save(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
 
@@ -614,6 +626,28 @@ def resolve_tryon_avatar(user, requested_style=None):
     return resolve_user_default_avatar(user, requested_style=requested_style)
 
 
+def get_latest_saved_custom_avatar(user):
+    """
+    Returns the user's most recently generated custom avatar that has been
+    successfully saved to Cloudinary (is_default=False, status=DONE, is_saved=True, non-empty result_image).
+    Returns None if no such custom avatar exists.
+    """
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    return (
+        Avatar.objects.filter(
+            user=user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            is_saved=True,
+        )
+        .exclude(result_image="")
+        .exclude(result_image__isnull=True)
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
 def resolve_auto_daily_avatar(user):
     """
     Avatar selection specifically for daily AUTOMATIC outfit generation:
@@ -626,21 +660,9 @@ def resolve_auto_daily_avatar(user):
     If there is no generated avatar with a valid Cloudinary image, use the user's
     DEFAULT AVATAR (is_default=True).
     """
-    if user and user.is_authenticated:
-        generated_avatar = (
-            Avatar.objects.filter(
-                user=user,
-                is_default=False,
-                status=Avatar.JobStatus.DONE,
-                is_saved=True,
-            )
-            .exclude(result_image="")
-            .exclude(result_image__isnull=True)
-            .order_by("-created_at", "-id")
-            .first()
-        )
-        if generated_avatar:
-            return generated_avatar
+    generated_avatar = get_latest_saved_custom_avatar(user)
+    if generated_avatar:
+        return generated_avatar
 
     user_gender = "male"
     if user and user.is_authenticated:
@@ -1082,6 +1104,234 @@ Return JSON adhering to:
     return avatar, selected_items, reasoning_dict
 
 
+def apply_auto_replacement_to_today_job(replacement_job: OutfitJob) -> OutfitJob:
+    """
+    Atomically updates today's AUTO OutfitJob with the successful replacement result,
+    protecting against stale webhooks (verifying against latest saved custom avatar).
+    """
+    if not replacement_job or replacement_job.status != JobStatus.DONE:
+        return replacement_job
+
+    user = replacement_job.user
+    today_date = replacement_job.scheduled_date
+
+    with transaction.atomic():
+        current_job = OutfitJob.objects.select_for_update().filter(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+        ).first()
+
+        latest_avatar = get_latest_saved_custom_avatar(user)
+        # Drop stale replacement if its avatar is no longer the latest saved custom avatar
+        if not latest_avatar or replacement_job.avatar_id != latest_avatar.id:
+            logger.info(
+                "[AUTO OUTFIT REPLACEMENT] Stale replacement job %s (avatar %s is not latest saved avatar %s). Dropping.",
+                replacement_job.id, replacement_job.avatar_id, getattr(latest_avatar, "id", None),
+            )
+            replacement_job.delete()
+            return current_job or replacement_job
+
+        if current_job:
+            # If current job already completed with this exact latest avatar, drop redundant replacement
+            if current_job.avatar_id == latest_avatar.id and current_job.status == JobStatus.DONE:
+                logger.info(
+                    "[AUTO OUTFIT REPLACEMENT] Current AUTO job %s already completed with latest avatar %s. Dropping redundant replacement.",
+                    current_job.id, latest_avatar.id,
+                )
+                replacement_job.delete()
+                return current_job
+
+            # If current_job already uses an avatar with a newer created_at timestamp, drop older replacement
+            if (
+                current_job.avatar
+                and current_job.avatar.created_at
+                and replacement_job.avatar
+                and replacement_job.avatar.created_at
+                and current_job.avatar.created_at > replacement_job.avatar.created_at
+            ):
+                logger.info(
+                    "[AUTO OUTFIT REPLACEMENT] Stale replacement job %s (replacement avatar created_at %s < current avatar created_at %s). Dropping.",
+                    replacement_job.id, replacement_job.avatar.created_at, current_job.avatar.created_at,
+                )
+                replacement_job.delete()
+                return current_job
+
+            current_job.avatar = replacement_job.avatar
+            current_job.fal_cdn_url = replacement_job.fal_cdn_url
+            current_job.result_image = replacement_job.result_image
+            current_job.status = JobStatus.DONE
+            current_job.fal_request_id = replacement_job.fal_request_id
+            current_job.error_message = ""
+            current_job.internal_error_detail = ""
+            current_job.is_saved = False
+            if replacement_job.reasoning_title:
+                current_job.reasoning_title = replacement_job.reasoning_title
+            if replacement_job.reasoning_subtitle:
+                current_job.reasoning_subtitle = replacement_job.reasoning_subtitle
+            if replacement_job.reasoning_items:
+                current_job.reasoning_items = replacement_job.reasoning_items
+            if replacement_job.reasoning_note:
+                current_job.reasoning_note = replacement_job.reasoning_note
+            current_job.save(update_fields=[
+                "avatar", "fal_cdn_url", "result_image", "status",
+                "fal_request_id", "error_message", "internal_error_detail",
+                "is_saved", "reasoning_title", "reasoning_subtitle",
+                "reasoning_items", "reasoning_note", "updated_at",
+            ])
+            current_job.wardrobe_items.set(replacement_job.wardrobe_items.all())
+            replacement_job.delete()
+            logger.info("[AUTO OUTFIT REPLACEMENT] Successfully applied replacement to AUTO job %s (new avatar %s)", current_job.id, current_job.avatar_id)
+            return current_job
+        else:
+            replacement_job.trigger_type = TriggerType.AUTO
+            replacement_job.internal_error_detail = ""
+            replacement_job.save(update_fields=["trigger_type", "internal_error_detail", "updated_at"])
+            return replacement_job
+
+
+def start_today_auto_job_replacement(user, new_avatar, today_date=None) -> OutfitJob:
+    """
+    Initiates replacement of today's AUTO OutfitJob for user with new_avatar.
+    - Idempotent and thread-safe: uses atomic transaction and row locking to prevent duplicate jobs.
+    - Safe retry: If replacement already FAILED for this avatar today, does not repeatedly retry.
+    - Replaces any older in-flight replacement with this newer avatar.
+    - Submits try-on job to fal.ai strictly outside database transaction.
+    """
+    if not user or not getattr(user, "is_authenticated", False) or not new_avatar:
+        return None
+
+    today_date = today_date or timezone.now().date()
+    from django.contrib.auth import get_user_model
+    UserModel = get_user_model()
+
+    should_submit = False
+    rep_job = None
+    current_job = None
+
+    with transaction.atomic():
+        UserModel.objects.select_for_update().filter(id=user.id).first()
+
+        current_job = OutfitJob.objects.filter(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+        ).first()
+
+        # If current completed job already has this avatar, no replacement needed
+        if current_job and current_job.avatar_id == new_avatar.id and current_job.status == JobStatus.DONE:
+            return current_job
+
+        # If an active replacement is already running for this exact avatar, return it (no duplicate submissions)
+        active_rep = OutfitJob.objects.filter(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            avatar=new_avatar,
+            internal_error_detail__contains="auto_replacement",
+            status__in=[JobStatus.PENDING, JobStatus.PROCESSING],
+        ).first()
+        if active_rep:
+            # If an unsubmitted job was abandoned without fal_request_id (e.g. process crash), clean it up
+            if not active_rep.fal_request_id and (timezone.now() - active_rep.created_at).total_seconds() > 30:
+                logger.warning("[AUTO OUTFIT REPLACEMENT] Cleaning up abandoned replacement job %s without fal_request_id", active_rep.id)
+                active_rep.delete()
+                active_rep = None
+            else:
+                logger.info("[AUTO OUTFIT REPLACEMENT] Active replacement job %s already running for avatar %s.", active_rep.id, new_avatar.id)
+                return active_rep
+
+        # Safe retry: If a replacement for this avatar already failed today, do not retry on every GET request
+        failed_rep = OutfitJob.objects.filter(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            avatar=new_avatar,
+            internal_error_detail__contains="auto_replacement",
+            status=JobStatus.FAILED,
+        ).first()
+        if failed_rep:
+            logger.info("[AUTO OUTFIT REPLACEMENT] Replacement previously failed for avatar %s. Skipping repeated submission.", new_avatar.id)
+            return current_job
+
+        # Cancel/remove any active replacement for an older avatar (newest avatar takes priority)
+        OutfitJob.objects.filter(
+            user=user,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            internal_error_detail__startswith="auto_replacement:",
+            status__in=[JobStatus.PENDING, JobStatus.PROCESSING],
+        ).exclude(avatar=new_avatar).delete()
+
+        # Reuse wardrobe items and reasoning from current job, or select new if none
+        if current_job and current_job.wardrobe_items.exists():
+            selected_items = list(current_job.wardrobe_items.all())
+            reasoning_dict = {
+                "title": current_job.reasoning_title,
+                "subtitle": current_job.reasoning_subtitle,
+                "reasons": current_job.reasoning_items,
+                "style_note": current_job.reasoning_note,
+            }
+        else:
+            try:
+                _, selected_items, reasoning_dict = select_auto_outfit_combination(user, today_date)
+            except Exception as exc:
+                logger.error("[AUTO OUTFIT REPLACEMENT] Failed selecting wardrobe items for replacement: %s", exc)
+                return current_job
+
+        if not selected_items:
+            logger.warning("[AUTO OUTFIT REPLACEMENT] No wardrobe items available for replacement for user %s", user.id)
+            return current_job
+
+        rep_job = OutfitJob.objects.create(
+            user=user,
+            avatar=new_avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.PENDING,
+            internal_error_detail=f"auto_replacement:{new_avatar.id}",
+            reasoning_title=reasoning_dict.get("title", ""),
+            reasoning_subtitle=reasoning_dict.get("subtitle", ""),
+            reasoning_items=reasoning_dict.get("reasons", []),
+            reasoning_note=reasoning_dict.get("style_note", ""),
+        )
+        rep_job.wardrobe_items.set(selected_items)
+        should_submit = True
+
+    if should_submit and rep_job:
+        try:
+            submit_try_on_job(rep_job)
+            rep_job.refresh_from_db()
+        except Exception as exc:
+            logger.error("[AUTO OUTFIT REPLACEMENT] Try-on submission failed for replacement job %s: %s", rep_job.id, exc)
+            rep_job.status = JobStatus.FAILED
+            rep_job.error_message = str(exc)
+            rep_job.internal_error_detail = f"auto_replacement:{new_avatar.id}:{exc}"
+            rep_job.save(update_fields=["status", "error_message", "internal_error_detail", "updated_at"])
+
+    return rep_job or current_job
+
+
+def trigger_today_auto_job_for_avatar(avatar: Avatar) -> None:
+    """
+    Called when a custom avatar is successfully saved to Cloudinary.
+    Checks if today's AUTO OutfitJob exists. If it exists and uses an older
+    avatar (or default avatar), starts replacement generation using this avatar.
+    """
+    if not avatar or not avatar.user or avatar.is_default or not avatar.is_saved:
+        return
+
+    today_date = timezone.now().date()
+    current_job = OutfitJob.objects.filter(
+        user=avatar.user,
+        scheduled_date=today_date,
+        trigger_type=TriggerType.AUTO,
+    ).first()
+
+    if current_job and current_job.avatar_id != avatar.id:
+        start_today_auto_job_replacement(avatar.user, avatar, today_date)
+
+
 def get_or_create_today_auto_job(user) -> OutfitJob:
     """
     Retrieves or lazily creates today's AUTO OutfitJob for the given user.
@@ -1092,7 +1342,24 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
 
     logger.info("[AUTO OUTFIT] GET /today/ request for user %s on date %s", user.id, today_date)
 
-    # 1. Read check: If today's non-failed AUTO job already exists, return it (NO OpenAI call, NO fal.ai call, NO cost!)
+    # 1. Sync any active replacement in progress for this user & today
+    active_rep = OutfitJob.objects.filter(
+        user=user,
+        scheduled_date=today_date,
+        trigger_type=TriggerType.MANUAL,
+        internal_error_detail__startswith="auto_replacement:",
+        status__in=[JobStatus.PENDING, JobStatus.PROCESSING],
+    ).first()
+    if active_rep:
+        if not active_rep.fal_request_id and (timezone.now() - active_rep.created_at).total_seconds() > 30:
+            logger.warning("[AUTO OUTFIT] Cleaning up abandoned replacement job %s without fal_request_id", active_rep.id)
+            active_rep.delete()
+        else:
+            synced_rep = sync_outfit_job_status(active_rep)
+            if synced_rep.status == JobStatus.DONE:
+                apply_auto_replacement_to_today_job(synced_rep)
+
+    # 2. Read check: If today's non-failed AUTO job already exists, return it (NO OpenAI call, NO fal.ai call, NO cost!)
     existing_job = OutfitJob.objects.filter(
         user=user,
         scheduled_date=today_date,
@@ -1101,6 +1368,9 @@ def get_or_create_today_auto_job(user) -> OutfitJob:
 
     if existing_job:
         if existing_job.status != JobStatus.FAILED:
+            latest_avatar = get_latest_saved_custom_avatar(user)
+            if latest_avatar and existing_job.avatar_id != latest_avatar.id:
+                start_today_auto_job_replacement(user, latest_avatar, today_date)
             logger.info("[AUTO OUTFIT] Existing active AUTO job found (ID %s, status=%s). Returning cached job.", existing_job.id, existing_job.status)
             return existing_job
         else:
