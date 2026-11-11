@@ -139,7 +139,8 @@ class Model3DAPITests(APITestCase):
             self.convert_url, {"outfit_job_id": self.pending_job_a.id}
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("not ready", str(response.data.get("message", "")).lower())
+        error_text = str(response.data.get("detail", "") or response.data.get("message", "") or response.data).lower()
+        self.assertIn("not ready", error_text)
 
     def test_cannot_convert_processing_outfit_job(self):
         self.client.force_authenticate(user=self.user_a)
@@ -147,7 +148,8 @@ class Model3DAPITests(APITestCase):
             self.convert_url, {"outfit_job_id": self.processing_job_a.id}
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("not ready", str(response.data.get("message", "")).lower())
+        error_text = str(response.data.get("detail", "") or response.data.get("message", "") or response.data).lower()
+        self.assertIn("not ready", error_text)
 
     def test_cannot_convert_failed_outfit_job(self):
         self.client.force_authenticate(user=self.user_a)
@@ -155,7 +157,8 @@ class Model3DAPITests(APITestCase):
             self.convert_url, {"outfit_job_id": self.failed_job_a.id}
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("failed", str(response.data.get("message", "")).lower())
+        error_text = str(response.data.get("detail", "") or response.data.get("message", "") or response.data).lower()
+        self.assertIn("failed", error_text)
 
     def test_cannot_convert_outfit_job_without_result_image(self):
         self.client.force_authenticate(user=self.user_a)
