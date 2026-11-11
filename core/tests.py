@@ -1,14 +1,25 @@
 import io
 from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.db import DatabaseError, IntegrityError
+from django.http import Http404
+from django.test import RequestFactory, override_settings
 from PIL import Image
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import (
+    AuthenticationFailed,
+    NotFound as DRFNotFound,
+    PermissionDenied as DRFPermissionDenied,
+    ValidationError,
+)
+from rest_framework.response import Response
 from rest_framework.test import APITestCase
+from rest_framework.views import APIView
 
 from avatars.models import Avatar
+from core.exceptions import ServiceError
 from core.models import BrandNew, SiteSettings
 from core.validators import (
     RestrictedImageField,
@@ -409,9 +420,10 @@ class BrandNewAPITestCase(APITestCase):
             format="multipart",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("title", response.data)
         self.assertTrue(
-            "This field may not be blank." in response.data["message"]
-            or "Title cannot be blank" in response.data["message"]
+            "This field may not be blank." in str(response.data["title"])
+            or "Title cannot be blank" in str(response.data["title"])
         )
 
         # Title shorter than 3 characters
@@ -422,7 +434,8 @@ class BrandNewAPITestCase(APITestCase):
             format="multipart",
         )
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Title must be at least 3 characters long.", response2.data["message"])
+        self.assertIn("title", response2.data)
+        self.assertIn("Title must be at least 3 characters long.", str(response2.data["title"]))
 
     def test_create_brand_new_description_validation(self, mock_upload):
         self.client.force_authenticate(user=self.user)
@@ -433,9 +446,10 @@ class BrandNewAPITestCase(APITestCase):
             format="multipart",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("description", response.data)
         self.assertTrue(
-            "This field may not be blank." in response.data["message"]
-            or "Description cannot be blank" in response.data["message"]
+            "This field may not be blank." in str(response.data["description"])
+            or "Description cannot be blank" in str(response.data["description"])
         )
 
     def test_create_brand_new_image_validation(self, mock_upload):
@@ -450,7 +464,8 @@ class BrandNewAPITestCase(APITestCase):
             format="multipart",
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Image size cannot exceed 10MB.", response.data["message"])
+        self.assertIn("product_image", response.data)
+        self.assertIn("Image size cannot exceed 10MB.", str(response.data["product_image"]))
 
         # Invalid file extension (valid image content with unsupported extension like .gif or .pdf)
         bad_ext = SimpleUploadedFile("photo.gif", VALID_PNG, content_type="image/gif")
@@ -460,7 +475,8 @@ class BrandNewAPITestCase(APITestCase):
             format="multipart",
         )
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Only JPG, JPEG, PNG, or WEBP image formats are allowed.", response2.data["message"])
+        self.assertIn("product_image", response2.data)
+        self.assertIn("Only JPG, JPEG, PNG, or WEBP image formats are allowed.", str(response2.data["product_image"]))
 
     def test_retrieve_brand_new_detail_and_not_found(self, mock_upload):
         item = BrandNew.objects.create(
@@ -533,3 +549,355 @@ class BrandNewAPITestCase(APITestCase):
     def test_site_settings_endpoint_preserved(self, mock_upload):
         response = self.client.get(self.settings_url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class DummyExceptionView(APIView):
+    """
+    Test APIView used to verify global exception handling for various exception types.
+    """
+    def get(self, request, *args, **kwargs):
+        error_type = request.query_params.get("error")
+        if error_type == "drf_validation":
+            raise ValidationError("Invalid request parameter.")
+        if error_type == "drf_permission":
+            raise DRFPermissionDenied("Custom DRF permission denied.")
+        if error_type == "drf_not_found":
+            raise DRFNotFound("Custom DRF resource not found.")
+        if error_type == "drf_auth":
+            raise AuthenticationFailed("Custom authentication failed.")
+        if error_type == "django_404":
+            raise Http404("Custom Django 404 resource missing.")
+        if error_type == "django_permission":
+            raise DjangoPermissionDenied("Custom Django permission denied.")
+        if error_type == "service_error":
+            raise ServiceError(detail="AI service temporarily offline.", status_code=502)
+        if error_type == "integrity_unique":
+            raise IntegrityError("duplicate key value violates unique constraint 'users_email_key'")
+        if error_type == "integrity_other":
+            raise IntegrityError("null value in column 'username' violates not-null constraint")
+        if error_type == "database_error":
+            raise DatabaseError("SELECT password, secret_key FROM accounts_user failed: connection refused")
+        if error_type == "unexpected_python":
+            1 / 0
+        if error_type == "unexpected_sensitive_detail":
+            class ArbitrarySensitiveError(Exception):
+                detail = "SELECT password, api_key FROM accounts_user WHERE secret='123'"
+            raise ArbitrarySensitiveError("Arbitrary failure")
+        return Response({"status": "ok", "message": "all good"})
+
+
+class GlobalExceptionHandlingTestCase(APITestCase):
+    """
+    Comprehensive test suite for centralized global exception handling across the project:
+    1. DRF validation exceptions.
+    2. Authentication exceptions.
+    3. Permission exceptions.
+    4. Missing objects and 404 errors.
+    5. Unexpected Python exceptions.
+    6. Serializer field-level validation errors.
+    7. Django-level errors outside DRF.
+    8. JSON responses for API errors.
+    9. Normal HTML behavior for Django admin.
+    10. Successful API responses remaining unchanged.
+    11. No sensitive internal information exposed in production responses.
+    """
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.view = DummyExceptionView.as_view()
+        self.user = User.objects.create_user(
+            email="global_exc_user@example.com",
+            name="Global User",
+            password="Password123!",
+            username="global_exc_user",
+            is_email_verified=True,
+        )
+
+    # 1. DRF validation exceptions
+    def test_drf_validation_exception_format(self):
+        req = self.factory.get("/api/v1/test/?error=drf_validation")
+        resp = self.view(req)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data, {"detail": "Invalid request parameter."})
+        self.assertNotIn("status", resp.data)
+        self.assertNotIn("code", resp.data)
+
+    # 2. Authentication exceptions
+    def test_drf_authentication_exception_format(self):
+        # Protected endpoint without auth credentials
+        resp = self.client.post("/api/v1/brand-new/", {"title": "Test"}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("detail", resp.data)
+        self.assertEqual(resp.data["detail"], "Authentication credentials were not provided.")
+        self.assertNotIn("status", resp.data)
+        self.assertNotIn("code", resp.data)
+
+        # Custom auth exception in view
+        req = self.factory.get("/api/v1/test/?error=drf_auth")
+        resp_custom = self.view(req)
+        self.assertEqual(resp_custom.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(resp_custom.data["detail"], "Custom authentication failed.")
+
+    # 3. Permission exceptions
+    def test_drf_permission_exception_format(self):
+        # DRF PermissionDenied
+        req = self.factory.get("/api/v1/test/?error=drf_permission")
+        resp = self.view(req)
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data["detail"], "Custom DRF permission denied.")
+        self.assertNotIn("status", resp.data)
+
+        # Django PermissionDenied converted by DRF
+        req2 = self.factory.get("/api/v1/test/?error=django_permission")
+        resp2 = self.view(req2)
+        self.assertEqual(resp2.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp2.data["detail"], "Custom Django permission denied.")
+
+    # 4. Missing objects and 404 errors
+    def test_missing_objects_and_404_errors(self):
+        # Detail view 404 on missing record
+        resp = self.client.get("/api/v1/brand-new/999999/")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("detail", resp.data)
+        self.assertIn("matches the given query", str(resp.data["detail"]))
+        self.assertNotIn("status", resp.data)
+
+        # DRF NotFound in view
+        req = self.factory.get("/api/v1/test/?error=drf_not_found")
+        resp2 = self.view(req)
+        self.assertEqual(resp2.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resp2.data["detail"], "Custom DRF resource not found.")
+
+        # Django Http404 in view converted by DRF
+        req3 = self.factory.get("/api/v1/test/?error=django_404")
+        resp3 = self.view(req3)
+        self.assertEqual(resp3.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resp3.data["detail"], "Custom Django 404 resource missing.")
+
+    # 5. Unexpected Python exceptions
+    def test_unexpected_python_exception_returns_safe_500(self):
+        with override_settings(DEBUG=False):
+            req = self.factory.get("/api/v1/test/?error=unexpected_python")
+            resp = self.view(req)
+            self.assertEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertEqual(resp.data, {"detail": "An unexpected server error occurred."})
+            self.assertNotIn("division by zero", str(resp.data).lower())
+
+    # 6. Serializer field-level validation errors
+    def test_serializer_field_level_validation_errors(self):
+        self.client.force_authenticate(user=self.user)
+        # Post missing required fields and short title
+        resp = self.client.post(
+            "/api/v1/brand-new/",
+            {"title": "a", "description": ""},
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        # Preserves native field error structure: dict with field names as keys
+        self.assertIn("title", resp.data)
+        self.assertIn("description", resp.data)
+        self.assertIn("product_image", resp.data)
+        self.assertIsInstance(resp.data["title"], list)
+        self.assertNotIn("status", resp.data)
+        self.assertNotIn("code", resp.data)
+
+    # 7. Django-level errors outside DRF
+    def test_django_level_404_outside_drf_returns_json_for_api(self):
+        # Non-existent endpoint under /api/v1/
+        resp = self.client.get("/api/v1/non-existent-endpoint/")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resp.headers.get("Content-Type"), "application/json")
+        data = resp.json()
+        self.assertEqual(data, {"detail": "Not found."})
+        self.assertNotIn("status", data)
+
+    # 8. JSON responses for API errors
+    def test_api_errors_always_return_json_content_type(self):
+        resp_401 = self.client.post("/api/v1/feed/posts/", {"caption": "test"})
+        self.assertEqual(resp_401.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("application/json", resp_401.headers.get("Content-Type", ""))
+
+    # 9. Normal HTML behavior for Django admin
+    def test_django_admin_preserves_html_error_pages(self):
+        # Authenticated admin user requesting non-existent admin page expecting HTML
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        resp = self.client.get("/admin/non-existent-admin-page/", HTTP_ACCEPT="text/html")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        content_type = resp.headers.get("Content-Type", "")
+        self.assertIn("text/html", content_type)
+        self.assertNotIn("application/json", content_type)
+
+    # 10. Successful API responses remaining unchanged
+    def test_successful_api_response_structure_unchanged(self):
+        resp = self.client.get("/api/v1/settings/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # Confirms native model/serializer dictionary, NOT wrapped in {"status": "success", "data": ...}
+        self.assertIn("id", resp.data)
+        self.assertNotIn("status", resp.data)
+        self.assertNotIn("code", resp.data)
+
+    # 11. No sensitive internal information exposed in production responses
+    def test_no_sensitive_db_information_exposed(self):
+        with override_settings(DEBUG=False):
+            # DatabaseError with sensitive SQL query
+            req = self.factory.get("/api/v1/test/?error=database_error")
+            resp = self.view(req)
+            self.assertEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertEqual(resp.data, {"detail": "A database error occurred."})
+            # Ensure no credentials or queries leaked
+            raw_text = str(resp.data)
+            self.assertNotIn("password", raw_text.lower())
+            self.assertNotIn("secret_key", raw_text.lower())
+            self.assertNotIn("accounts_user", raw_text.lower())
+            self.assertNotIn("select ", raw_text.lower())
+
+    # 12. IntegrityError unique duplicate returns 409 Conflict
+    def test_integrity_error_unique_duplicate_returns_409(self):
+        req = self.factory.get("/api/v1/test/?error=integrity_unique")
+        resp = self.view(req)
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(resp.data, {"detail": "This record already exists or violates a unique constraint."})
+
+    # 13. ServiceError preserves custom status code and detail message
+    def test_custom_service_error_preserves_status_code_and_detail(self):
+        req = self.factory.get("/api/v1/test/?error=service_error")
+        resp = self.view(req)
+        self.assertEqual(resp.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(resp.data, {"detail": "AI service temporarily offline."})
+
+    # 14. Outside DRF handlers (handler400, handler403, handler404, handler500)
+    def test_outside_drf_custom_handlers(self):
+        from Khzanti.urls import api_handler400, api_handler403, api_handler404, api_handler500
+
+        # API requests return safe native JSON without leaking exception internals
+        api_req = self.factory.get("/api/v1/custom-test/")
+        h400_resp = api_handler400(api_req, Exception("Internal resolver or syntax error."))
+        self.assertEqual(h400_resp.status_code, 400)
+        self.assertEqual(h400_resp.headers.get("Content-Type"), "application/json")
+        self.assertEqual(h400_resp.content.decode("utf-8"), '{"detail": "Bad request."}')
+
+        h403_resp = api_handler403(api_req, Exception("Access denied internal path."))
+        self.assertEqual(h403_resp.status_code, 403)
+        self.assertEqual(h403_resp.content.decode("utf-8"), '{"detail": "Permission denied."}')
+
+        h404_resp = api_handler404(api_req, Exception("{'tried': [['accounts_urls']]}"))
+        self.assertEqual(h404_resp.status_code, 404)
+        self.assertEqual(h404_resp.content.decode("utf-8"), '{"detail": "Not found."}')
+
+        h500_resp = api_handler500(api_req)
+        self.assertEqual(h500_resp.status_code, 500)
+        self.assertEqual(h500_resp.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+    # 15. ApiExceptionMiddleware unhandled exception handling and debug-mode sanitization
+    def test_api_exception_middleware_intercepts_unhandled_error_and_sanitizes(self):
+        from core.middleware import ApiExceptionMiddleware
+
+        def dummy_view(request):
+            return Response({"ok": True})
+
+        middleware = ApiExceptionMiddleware(dummy_view)
+        api_req = self.factory.get("/api/v1/some-endpoint/")
+
+        # In production (DEBUG=False): generic unexpected message
+        with override_settings(DEBUG=False):
+            resp = middleware.process_exception(api_req, ValueError("Some error."))
+            self.assertIsNotNone(resp)
+            self.assertEqual(resp.status_code, 500)
+            self.assertEqual(resp.headers.get("Content-Type"), "application/json")
+            self.assertEqual(resp.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+        # In DEBUG=True: SQL, paths, passwords, and tokens are SANITIZED out
+        with override_settings(DEBUG=True):
+            # SQL leak attempt
+            resp_sql = middleware.process_exception(api_req, ValueError("SELECT password FROM accounts_user"))
+            self.assertEqual(resp_sql.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+            # Filesystem path leak attempt
+            resp_path = middleware.process_exception(api_req, ValueError(r"Error in C:\Users\App\views.py line 42"))
+            self.assertEqual(resp_path.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+            # Secret / Token leak attempt
+            resp_token = middleware.process_exception(api_req, ValueError("Invalid token secret_key_12345"))
+            self.assertEqual(resp_token.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+            # Safe application message in debug
+            resp_safe = middleware.process_exception(api_req, ValueError("Calculation exceeded maximum item count"))
+            self.assertEqual(resp_safe.content.decode("utf-8"), '{"detail": "Calculation exceeded maximum item count"}')
+
+        # Non-API request returns None to allow standard Django HTML error view
+        html_req = self.factory.get("/admin/some-endpoint/", HTTP_ACCEPT="text/html")
+        html_resp = middleware.process_exception(html_req, ValueError("Admin failure."))
+        self.assertIsNone(html_resp)
+
+    # 16. Reliability of 409 duplicate detection across PostgreSQL and SQLite formats
+    def test_integrity_error_duplicate_detection_postgres_and_sqlite(self):
+        from core.exceptions import get_integrity_error_detail
+
+        # PostgreSQL format
+        pg_err = IntegrityError('duplicate key value violates unique constraint "users_email_key"\nDETAIL: Key (lower(email))=(test@example.com) already exists.')
+        pg_code, pg_detail = get_integrity_error_detail(pg_err)
+        self.assertEqual(pg_code, 409)
+        self.assertEqual(pg_detail, "This record already exists or violates a unique constraint.")
+
+        # SQLite format
+        sqlite_err = IntegrityError("UNIQUE constraint failed: accounts_user.email")
+        sq_code, sq_detail = get_integrity_error_detail(sqlite_err)
+        self.assertEqual(sq_code, 409)
+        self.assertEqual(sq_detail, "This record already exists or violates a unique constraint.")
+
+        # Outfit specific duplicate format
+        outfit_err = IntegrityError('duplicate key value violates unique constraint "saved_outfit_user_date_unique"')
+        of_code, of_detail = get_integrity_error_detail(outfit_err)
+        self.assertEqual(of_code, 409)
+        self.assertEqual(of_detail, "This outfit has already been saved.")
+
+        # Non-duplicate integrity error (foreign key or null constraint) -> 500
+        null_err = IntegrityError('null value in column "username" violates not-null constraint')
+        null_code, null_detail = get_integrity_error_detail(null_err)
+        self.assertEqual(null_code, 500)
+        self.assertEqual(null_detail, "A database error occurred.")
+
+    # 17. Regression test: Arbitrary unexpected exception with sensitive .detail attribute is not trusted
+    def test_unexpected_exception_with_sensitive_detail_is_sanitized(self):
+        from core.middleware import ApiExceptionMiddleware
+
+        # Inside DRF view: DEBUG=True must not leak sensitive .detail
+        with override_settings(DEBUG=True):
+            req_debug = self.factory.get("/api/v1/test/?error=unexpected_sensitive_detail")
+            resp_debug = self.view(req_debug)
+            self.assertEqual(resp_debug.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertEqual(resp_debug.data, {"detail": "An unexpected server error occurred."})
+            raw_text = str(resp_debug.data).lower()
+            self.assertNotIn("password", raw_text)
+            self.assertNotIn("api_key", raw_text)
+            self.assertNotIn("select ", raw_text)
+
+        # Inside DRF view: DEBUG=False must return generic 500
+        with override_settings(DEBUG=False):
+            req_prod = self.factory.get("/api/v1/test/?error=unexpected_sensitive_detail")
+            resp_prod = self.view(req_prod)
+            self.assertEqual(resp_prod.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            self.assertEqual(resp_prod.data, {"detail": "An unexpected server error occurred."})
+
+        # In middleware: Arbitrary exception with sensitive .detail attribute
+        class CustomUntrustedError(Exception):
+            detail = "Bearer secret_api_token_value_xyz"
+
+        def dummy_view(request):
+            return Response({"ok": True})
+
+        middleware = ApiExceptionMiddleware(dummy_view)
+        api_req = self.factory.get("/api/v1/some-endpoint/")
+
+        with override_settings(DEBUG=True):
+            mw_resp_debug = middleware.process_exception(api_req, CustomUntrustedError("Token error"))
+            self.assertEqual(mw_resp_debug.status_code, 500)
+            self.assertEqual(mw_resp_debug.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
+
+        with override_settings(DEBUG=False):
+            mw_resp_prod = middleware.process_exception(api_req, CustomUntrustedError("Token error"))
+            self.assertEqual(mw_resp_prod.status_code, 500)
+            self.assertEqual(mw_resp_prod.content.decode("utf-8"), '{"detail": "An unexpected server error occurred."}')
