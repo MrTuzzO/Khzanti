@@ -461,7 +461,7 @@ class AvatarAPIEndpointsTestCase(APITestCase):
         self.assertEqual(res_multi_real.data["style"], "realistic")
         self.assertEqual(res_multi_cart.data["style"], "cartoon")
 
-    def test_sync_avatar_status_leaves_unsaved_fal_cdn_url(self, mock_cloud):
+    def test_sync_avatar_status_automatically_uploads_and_saves_to_cloudinary(self, mock_cloud):
         avatar = Avatar.objects.create(
             user=self.user,
             source_photo=self.dummy_image,
@@ -470,20 +470,281 @@ class AvatarAPIEndpointsTestCase(APITestCase):
             fal_request_id="req_sync_test_888",
         )
         mock_completed = fal_client.Completed(logs=[], metrics={})
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
 
         with patch("fal_client.status", return_value=mock_completed), patch(
             "fal_client.result",
             return_value={"images": [{"url": "https://v3b.fal.media/test.png"}]},
-        ):
+        ), patch("requests.get", return_value=mock_resp):
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "done")
+        self.assertTrue(response.data["is_saved"])
+        self.assertEqual(response.data["fal_cdn_url"], "https://v3b.fal.media/test.png")
+        self.assertIn("res.cloudinary.com", response.data["result_image"])
+
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+        self.assertTrue(bool(avatar.result_image))
+
+    def test_sync_avatar_status_failed_cloudinary_leaves_unsaved(self, mock_cloud):
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.PROCESSING,
+            fal_request_id="req_sync_fail_999",
+        )
+        mock_completed = fal_client.Completed(logs=[], metrics={})
+
+        with patch("fal_client.status", return_value=mock_completed), patch(
+            "fal_client.result",
+            return_value={"images": [{"url": "https://v3b.fal.media/test.png"}]},
+        ), patch("requests.get", side_effect=Exception("Cloudinary upload failed")):
             response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["status"], "done")
         self.assertFalse(response.data["is_saved"])
-        self.assertEqual(response.data["fal_cdn_url"], "https://v3b.fal.media/test.png")
-        self.assertEqual(response.data["result_image"], "https://v3b.fal.media/test.png")
 
         avatar.refresh_from_db()
+        self.assertFalse(avatar.is_saved)
+        self.assertFalse(bool(avatar.result_image))
+
+    def test_save_avatar_to_cloudinary_idempotent_and_prevents_simultaneous_uploads(self, mock_cloud):
+        """Simultaneous calls to save_avatar_to_cloudinary perform upload only once."""
+        from avatars.services import save_avatar_to_cloudinary
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/test_concurrent.png",
+            is_saved=False,
+        )
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            res1 = save_avatar_to_cloudinary(avatar)
+            res2 = save_avatar_to_cloudinary(avatar)
+
+        # GET was called exactly once because the second call detected is_saved
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertTrue(res1.is_saved)
+        self.assertTrue(res2.is_saved)
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+
+    def test_save_avatar_refuses_processing_or_pending_avatars(self, mock_cloud):
+        """save_avatar_to_cloudinary refuses to process avatars in PENDING or PROCESSING state."""
+        from avatars.services import save_avatar_to_cloudinary
+        from core.exceptions import ServiceError
+
+        for test_status in [Avatar.JobStatus.PENDING, Avatar.JobStatus.PROCESSING]:
+            avatar = Avatar.objects.create(
+                user=self.user,
+                source_photo=self.dummy_image,
+                style=Avatar.Style.REALISTIC,
+                status=test_status,
+                fal_cdn_url="https://v3b.fal.media/in_progress.png",
+                is_saved=False,
+            )
+            with patch("requests.get") as mock_get, patch("outfits.services.trigger_today_auto_job_for_avatar") as mock_trigger:
+                with self.assertRaises(ServiceError) as ctx:
+                    save_avatar_to_cloudinary(avatar)
+                self.assertIn("Avatar generation must be completed", str(ctx.exception.detail))
+                mock_get.assert_not_called()
+                mock_trigger.assert_not_called()
+
+            avatar.refresh_from_db()
+            self.assertFalse(avatar.is_saved)
+            self.assertFalse(bool(avatar.result_image))
+
+    def test_save_avatar_refuses_failed_avatars(self, mock_cloud):
+        """save_avatar_to_cloudinary refuses to process avatars in FAILED state."""
+        from avatars.services import save_avatar_to_cloudinary
+        from core.exceptions import ServiceError
+
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.FAILED,
+            fal_cdn_url="https://v3b.fal.media/failed.png",
+            is_saved=False,
+            error_message="Generation failed on fal.ai",
+        )
+        with patch("requests.get") as mock_get, patch("outfits.services.trigger_today_auto_job_for_avatar") as mock_trigger:
+            with self.assertRaises(ServiceError) as ctx:
+                save_avatar_to_cloudinary(avatar)
+            self.assertIn("Avatar generation must be completed", str(ctx.exception.detail))
+            mock_get.assert_not_called()
+            mock_trigger.assert_not_called()
+
+        avatar.refresh_from_db()
+        self.assertFalse(avatar.is_saved)
+        self.assertFalse(bool(avatar.result_image))
+
+    def test_save_avatar_refuses_empty_or_invalid_image_urls(self, mock_cloud):
+        """save_avatar_to_cloudinary refuses avatars without a valid HTTP(S) image URL."""
+        from avatars.services import save_avatar_to_cloudinary
+        from core.exceptions import ServiceError
+
+        for bad_url in ["", "   ", "not-a-url", "ftp://invalid/a.png"]:
+            avatar = Avatar.objects.create(
+                user=self.user,
+                source_photo=self.dummy_image,
+                style=Avatar.Style.REALISTIC,
+                status=Avatar.JobStatus.DONE,
+                fal_cdn_url=bad_url,
+                is_saved=False,
+            )
+            with patch("requests.get") as mock_get:
+                with self.assertRaises(ServiceError) as ctx:
+                    save_avatar_to_cloudinary(avatar)
+                self.assertIn("valid generated image", str(ctx.exception.detail))
+                mock_get.assert_not_called()
+
+            avatar.refresh_from_db()
+            self.assertFalse(avatar.is_saved)
+
+    def test_save_avatar_succeeds_for_completed_avatar_with_valid_url(self, mock_cloud):
+        """save_avatar_to_cloudinary succeeds strictly for DONE avatars with valid result URLs."""
+        from avatars.services import save_avatar_to_cloudinary
+
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/valid_completed.png",
+            is_saved=False,
+        )
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp) as mock_get, patch(
+            "outfits.services.trigger_today_auto_job_for_avatar"
+        ) as mock_trigger:
+            saved = save_avatar_to_cloudinary(avatar)
+            mock_get.assert_called_once_with("https://v3b.fal.media/valid_completed.png", timeout=30)
+            mock_trigger.assert_called_once_with(avatar)
+
+        self.assertTrue(saved.is_saved)
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+        self.assertTrue(bool(avatar.result_image))
+
+    def test_avatar_url_transitions_to_cloudinary_url_and_persists_on_subsequent_requests(self, mock_cloud):
+        """
+        Tests complete URL transition:
+        1. Creates an avatar in PROCESSING status with fal.ai request ID.
+        2. Simulates successful fal.ai completion with fal CDN URL.
+        3. Mocks Cloudinary upload returning a persistent Cloudinary URL.
+        4. Calls avatar status endpoint and verifies result_image is the Cloudinary URL and is_saved=True.
+        5. Calls avatar status endpoint again without fal.ai mocks to verify the Cloudinary URL was persisted.
+        6. Calls avatar list endpoint to verify the returned avatar includes the Cloudinary URL.
+        """
+        fal_cdn_url = "https://v3b.fal.media/fal_generated_look_123.png"
+        custom_cloudinary_response = {
+            "public_id": "avatars/result/avatar_saved_auto",
+            "version": 99999,
+            "width": 100,
+            "height": 100,
+            "format": "png",
+            "resource_type": "image",
+            "created_at": "2026-08-11T00:00:00Z",
+            "bytes": 68,
+            "type": "upload",
+            "url": "http://res.cloudinary.com/test/image/upload/v99999/avatar_saved_auto.png",
+            "secure_url": "https://res.cloudinary.com/test/image/upload/v99999/avatar_saved_auto.png",
+        }
+        mock_cloud.return_value = custom_cloudinary_response
+
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.PROCESSING,
+            fal_request_id="req_transition_test_101",
+        )
+
+        mock_completed = fal_client.Completed(logs=[], metrics={})
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("fal_client.status", return_value=mock_completed), patch(
+            "fal_client.result",
+            return_value={"images": [{"url": fal_cdn_url}]},
+        ), patch("requests.get", return_value=mock_resp):
+            # First status call triggers completion & automatic Cloudinary saving
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "done")
+        self.assertTrue(response.data["is_saved"])
+        self.assertEqual(response.data["fal_cdn_url"], fal_cdn_url)
+        # result_image must be the Cloudinary URL, NOT the fal CDN URL
+        self.assertIn("res.cloudinary.com", response.data["result_image"])
+        self.assertIn("avatar_saved_auto", response.data["result_image"])
+
+        # Second status call (subsequent request): no fal.ai or Cloudinary mocks needed, reads from DB
+        response2 = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response2.data["status"], "done")
+        self.assertTrue(response2.data["is_saved"])
+        self.assertEqual(response2.data["result_image"], response.data["result_image"])
+        self.assertEqual(response2.data["fal_cdn_url"], fal_cdn_url)
+
+        # List endpoint also returns the Cloudinary URL
+        list_response = self.client.get("/api/v1/avatars/mine/")
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data if isinstance(list_response.data, list) else list_response.data.get("results", [])
+        avatar_entry = next((item for item in results if item["id"] == avatar.id), None)
+        self.assertIsNotNone(avatar_entry)
+        self.assertTrue(avatar_entry["is_saved"])
+        self.assertEqual(avatar_entry["result_image"], response.data["result_image"])
+
+    def test_failed_cloudinary_upload_never_exposes_false_cloudinary_url_or_saved_flag(self, mock_cloud):
+        """
+        Verifies that when Cloudinary upload fails:
+        - is_saved is False
+        - result_image falls back to fal_cdn_url (or null), never exposes a false Cloudinary URL
+        - Database record remains is_saved=False
+        """
+        fal_cdn_url = "https://v3b.fal.media/fal_cdn_only.png"
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.PROCESSING,
+            fal_request_id="req_fail_cloud_102",
+        )
+
+        mock_completed = fal_client.Completed(logs=[], metrics={})
+
+        with patch("fal_client.status", return_value=mock_completed), patch(
+            "fal_client.result",
+            return_value={"images": [{"url": fal_cdn_url}]},
+        ), patch("requests.get", side_effect=Exception("Cloudinary upload failed")):
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "done")
+        self.assertFalse(response.data["is_saved"])
+        # Must return the fal CDN URL, never a broken or false Cloudinary URL
+        self.assertEqual(response.data["result_image"], fal_cdn_url)
+        self.assertNotIn("cloudinary", response.data["result_image"].lower())
+
+        avatar.refresh_from_db()
+        self.assertFalse(avatar.is_saved)
         self.assertFalse(bool(avatar.result_image))
 
     def test_sync_avatar_status_marks_is_preferred(self, mock_cloud):
