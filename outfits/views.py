@@ -325,7 +325,10 @@ class TryOnWebhookView(AsyncAPIView):
             err_msg = data.get("error") or str(payload_body) or "Virtual try-on generation failed on fal.ai"
             logger.error("[OUTFITS WEBHOOK TRY-ON] fal.ai returned error for OutfitJob %s: %s", job.id, err_msg)
             job.status = JobStatus.FAILED
-            job.internal_error_detail = str(err_msg)
+            if job.internal_error_detail and "auto_replacement:" in job.internal_error_detail:
+                job.internal_error_detail = f"auto_replacement:{job.avatar_id}:{err_msg}"
+            else:
+                job.internal_error_detail = str(err_msg)
             job.error_message = _friendly_error_message(str(err_msg))
             await job.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
             return Response({"status": "error_handled"}, status=status.HTTP_200_OK)
@@ -343,7 +346,10 @@ class TryOnWebhookView(AsyncAPIView):
         if not image_url:
             logger.error("[OUTFITS WEBHOOK TRY-ON] No image URL extracted from payload for OutfitJob %s: %s", job.id, payload_body)
             job.status = JobStatus.FAILED
-            job.internal_error_detail = f"No image URL returned in payload: {payload_body}"
+            if job.internal_error_detail and "auto_replacement:" in job.internal_error_detail:
+                job.internal_error_detail = f"auto_replacement:{job.avatar_id}:No image URL returned in payload: {payload_body}"
+            else:
+                job.internal_error_detail = f"No image URL returned in payload: {payload_body}"
             job.error_message = "Failed to generate try-on image."
             await job.asave(update_fields=["status", "internal_error_detail", "error_message", "updated_at"])
             return Response({"status": "error_handled"}, status=status.HTTP_200_OK)
@@ -352,9 +358,15 @@ class TryOnWebhookView(AsyncAPIView):
         job.status = JobStatus.DONE
         job.is_saved = False
         job.error_message = ""
-        job.internal_error_detail = ""
+        is_auto_replacement = bool(job.internal_error_detail and job.internal_error_detail.startswith("auto_replacement:"))
+        if not is_auto_replacement:
+            job.internal_error_detail = ""
         await job.asave(update_fields=["fal_cdn_url", "status", "is_saved", "error_message", "internal_error_detail", "updated_at"])
         logger.info("[OUTFITS WEBHOOK TRY-ON] Successfully completed OutfitJob %s", job.id)
+
+        if is_auto_replacement:
+            from .services import apply_auto_replacement_to_today_job
+            await sync_to_async(apply_auto_replacement_to_today_job)(job)
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
 
