@@ -1,14 +1,39 @@
 import logging
+from django.core.exceptions import PermissionDenied
 from django.db import DatabaseError, IntegrityError
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
+from rest_framework.exceptions import APIException
+
+from core.exceptions import get_integrity_error_detail, get_safe_unexpected_exception_detail
 
 logger = logging.getLogger(__name__)
 
 
+def is_api_request(request):
+    """
+    Determines whether an incoming request targets the JSON API
+    or expects a JSON response, versus an admin or browser-facing HTML page.
+    """
+    if not request:
+        return False
+    path = getattr(request, "path_info", None) or getattr(request, "path", "")
+    if path.startswith("/api/"):
+        return True
+    accept = (
+        request.headers.get("accept", "")
+        if hasattr(request, "headers")
+        else request.META.get("HTTP_ACCEPT", "")
+    )
+    content_type = getattr(request, "content_type", "") or request.META.get("CONTENT_TYPE", "")
+    return "application/json" in accept or "application/json" in content_type
+
+
 class ApiExceptionMiddleware:
     """
-    Middleware that intercepts unhandled exceptions for API requests under /api/v1/*
-    and guarantees a structured JSON error response instead of a Django HTML debug traceback page.
+    Middleware that intercepts unhandled exceptions for API requests under /api/*
+    (or requests expecting JSON) and guarantees a native JSON error response
+    ({"detail": "..."}) instead of a Django HTML debug traceback page,
+    while preserving standard HTML error pages for admin and browser-facing requests.
     """
     def __init__(self, get_response):
         self.get_response = get_response
@@ -17,38 +42,40 @@ class ApiExceptionMiddleware:
         return self.get_response(request)
 
     def process_exception(self, request, exception):
-        # Only intercept API paths (/api/v1/*) or requests expecting JSON
-        if not (request.path.startswith("/api/v1/") or request.headers.get("accept") == "application/json"):
+        # Only intercept API paths (/api/*) or requests expecting JSON
+        if not is_api_request(request):
             return None
 
-        logger.exception("ApiExceptionMiddleware caught exception on %s %s: %s", request.method, request.path, exception)
+        logger.exception(
+            "ApiExceptionMiddleware caught unhandled exception on %s %s: %s",
+            getattr(request, "method", "UNKNOWN"),
+            getattr(request, "path", ""),
+            exception,
+        )
+
+        if isinstance(exception, Http404):
+            return JsonResponse({"detail": "Not found."}, status=404)
+
+        if isinstance(exception, PermissionDenied):
+            return JsonResponse({"detail": "Permission denied."}, status=403)
 
         if isinstance(exception, IntegrityError):
-            err_str = str(exception).lower()
-            if any(k in err_str for k in ("unique", "duplicate", "already exists")):
-                code = 409
-                message = (
-                    "This outfit has already been saved."
-                    if ("saved_outfit" in err_str or "outfit" in err_str)
-                    else "This record already exists or violates a unique constraint."
-                )
-            else:
-                code = 500
-                message = "A database error occurred."
-        elif isinstance(exception, DatabaseError):
-            code = 500
-            message = "A database error occurred."
-        else:
-            code = 500
-            message = "An unexpected server error occurred."
+            code, detail = get_integrity_error_detail(exception)
+            return JsonResponse({"detail": detail}, status=code)
 
-        return JsonResponse(
-            {
-                "status": "error",
-                "code": code,
-                "message": message,
-                "data": None,
-            },
-            status=code,
-            content_type="application/json",
-        )
+        if isinstance(exception, DatabaseError):
+            return JsonResponse({"detail": "A database error occurred."}, status=500)
+
+        # Trusted application exceptions (standard DRF APIException subclasses, including ServiceError)
+        if isinstance(exception, APIException):
+            code = getattr(exception, "status_code", 500)
+            detail = exception.detail
+            if isinstance(detail, (list, tuple)) and len(detail) == 1:
+                detail = detail[0]
+            elif isinstance(detail, dict):
+                return JsonResponse(detail, status=code)
+            return JsonResponse({"detail": str(detail)}, status=code)
+
+        # Unexpected exceptions (including arbitrary non-API exceptions with a .detail attribute) are sanitized
+        detail = get_safe_unexpected_exception_detail(exception)
+        return JsonResponse({"detail": detail}, status=500)
