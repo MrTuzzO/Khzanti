@@ -32,37 +32,38 @@ if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 
+from core.middleware import is_api_request
+
+
+def api_handler400(request, exception=None):
+    if is_api_request(request):
+        return JsonResponse({"detail": "Bad request."}, status=400)
+    from django.views.defaults import bad_request
+    return bad_request(request, exception)
+
+
+def api_handler403(request, exception=None):
+    if is_api_request(request):
+        return JsonResponse({"detail": "Permission denied."}, status=403)
+    from django.views.defaults import permission_denied
+    return permission_denied(request, exception)
+
+
 def api_handler404(request, exception=None):
-    if request.path.startswith("/api/v1/") or request.headers.get("accept") == "application/json":
-        return JsonResponse(
-            {
-                "status": "error",
-                "code": 404,
-                "message": "The requested resource was not found.",
-                "data": None,
-            },
-            status=404,
-            content_type="application/json",
-        )
+    if is_api_request(request):
+        return JsonResponse({"detail": "Not found."}, status=404)
     from django.views.defaults import page_not_found
     return page_not_found(request, exception)
 
 
 def api_handler500(request):
-    if request.path.startswith("/api/v1/") or request.headers.get("accept") == "application/json":
-        return JsonResponse(
-            {
-                "status": "error",
-                "code": 500,
-                "message": "An unexpected server error occurred.",
-                "data": None,
-            },
-            status=500,
-            content_type="application/json",
-        )
+    if is_api_request(request):
+        return JsonResponse({"detail": "An unexpected server error occurred."}, status=500)
     from django.views.defaults import server_error
     return server_error(request)
 
 
+handler400 = "Khzanti.urls.api_handler400"
+handler403 = "Khzanti.urls.api_handler403"
 handler404 = "Khzanti.urls.api_handler404"
 handler500 = "Khzanti.urls.api_handler500"
