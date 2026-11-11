@@ -14,7 +14,7 @@ from .serializers import (
     AvatarSerializer,
     SystemDefaultAvatarAdminSerializer,
 )
-from .services import resolve_user_default_avatar, submit_avatar_job, sync_avatar_status
+from .services import resolve_user_default_avatar, save_avatar_to_cloudinary, submit_avatar_job, sync_avatar_status
 
 
 def _raise_if_avatar_failed(avatar: Avatar) -> None:
@@ -121,30 +121,8 @@ class AvatarSaveView(generics.GenericAPIView):
                 status_code=400,
             )
 
-        if not avatar.is_saved:
-            if not avatar.fal_cdn_url:
-                raise ServiceError(
-                    detail="No generated avatar image available to save.",
-                    status_code=400,
-                )
-
-            try:
-                img_resp = requests.get(avatar.fal_cdn_url, timeout=30)
-                img_resp.raise_for_status()
-
-                filename = f"avatar_{avatar.id}.png"
-                avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
-                avatar.is_saved = True
-                avatar.save()
-            except Exception as exc:
-                raw_error = str(exc)
-                raise ServiceError(
-                    detail="Failed to save avatar image to cloud storage.",
-                    debug_detail=raw_error,
-                    status_code=502,
-                )
-
-        serializer = self.get_serializer(avatar)
+        saved_avatar = save_avatar_to_cloudinary(avatar)
+        serializer = self.get_serializer(saved_avatar)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
