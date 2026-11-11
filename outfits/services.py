@@ -636,7 +636,7 @@ def resolve_auto_daily_avatar(user):
             )
             .exclude(result_image="")
             .exclude(result_image__isnull=True)
-            .order_by("-created_at")
+            .order_by("-created_at", "-id")
             .first()
         )
         if generated_avatar:
