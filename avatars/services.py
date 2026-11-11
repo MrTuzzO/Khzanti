@@ -303,6 +303,11 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
                     "updated_at",
                 ]
             )
+
+            try:
+                save_avatar_to_cloudinary(avatar)
+            except Exception as save_err:
+                logger.error("Auto-saving avatar %s to Cloudinary failed: %s", avatar.id, save_err)
     except Exception as exc:
         raw_error = str(exc)
         logger.error("Avatar job %s status sync failed: %s", avatar.id, raw_error, exc_info=True)
@@ -317,37 +322,86 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
 def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
     """
     Explicitly downloads the generated avatar from fal.ai CDN URL and uploads it to Cloudinary storage.
-    Idempotent: if already saved, returns immediately without re-uploading.
+    Idempotent and thread-safe: locks the avatar row with select_for_update to prevent simultaneous
+    duplicate uploads for the same Avatar record.
+    Refuses to process avatars unless status is DONE and a valid result image URL exists.
     """
     if avatar.is_saved:
         return avatar
 
-    url_to_download = avatar.fal_cdn_url or (avatar.result_image.url if avatar.result_image else "")
-    if not url_to_download:
-        from core.exceptions import ServiceError
+    from django.db import transaction
+    from core.exceptions import ServiceError
+
+    if avatar.status != Avatar.JobStatus.DONE:
+        raise ServiceError(
+            detail=f"Cannot save avatar with status '{avatar.status}'. Avatar generation must be completed.",
+            status_code=400,
+        )
+
+    initial_url = avatar.fal_cdn_url or (avatar.result_image.url if avatar.result_image else "")
+    if not initial_url or not str(initial_url).strip() or not str(initial_url).startswith(("http://", "https://")):
         raise ServiceError(
             detail="Avatar does not have a valid generated image to save.",
             status_code=400,
         )
 
-    try:
-        img_resp = requests.get(url_to_download, timeout=30)
-        img_resp.raise_for_status()
+    should_trigger_today_regeneration = False
 
-        filename = f"avatar_{avatar.id}.png"
-        avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
-        avatar.is_saved = True
-        avatar.save(update_fields=["result_image", "is_saved", "updated_at"])
-    except Exception as exc:
-        from core.exceptions import ServiceError
-        if isinstance(exc, ServiceError):
-            raise exc
-        raw_error = str(exc)
-        logger.error("Avatar %s save to Cloudinary failed: %s", avatar.id, raw_error, exc_info=True)
-        raise ServiceError(
-            detail="Failed to save avatar image. Please try again later.",
-            debug_detail=raw_error,
-            status_code=502,
-        )
+    with transaction.atomic():
+        locked_avatar = Avatar.objects.select_for_update().filter(id=avatar.id).first()
+        if not locked_avatar:
+            raise ServiceError(detail="Avatar not found.", status_code=404)
+
+        if locked_avatar.is_saved:
+            avatar.is_saved = True
+            avatar.result_image = locked_avatar.result_image
+            return avatar
+
+        if locked_avatar.status != Avatar.JobStatus.DONE:
+            raise ServiceError(
+                detail=f"Cannot save avatar with status '{locked_avatar.status}'. Avatar generation must be completed.",
+                status_code=400,
+            )
+
+        url_to_download = locked_avatar.fal_cdn_url or (locked_avatar.result_image.url if locked_avatar.result_image else "")
+        if not url_to_download or not str(url_to_download).strip() or not str(url_to_download).startswith(("http://", "https://")):
+            raise ServiceError(
+                detail="Avatar does not have a valid generated image to save.",
+                status_code=400,
+            )
+
+        try:
+            img_resp = requests.get(url_to_download, timeout=30)
+            img_resp.raise_for_status()
+
+            filename = f"avatar_{locked_avatar.id}.png"
+            locked_avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
+            locked_avatar.is_saved = True
+            locked_avatar.save(update_fields=["result_image", "is_saved", "updated_at"])
+
+            avatar.result_image = locked_avatar.result_image
+            avatar.is_saved = True
+
+            if locked_avatar.user and not locked_avatar.is_default and locked_avatar.is_saved:
+                should_trigger_today_regeneration = True
+        except Exception as exc:
+            if isinstance(exc, ServiceError):
+                raise exc
+            raw_error = str(exc)
+            logger.error("Avatar %s save to Cloudinary failed: %s", locked_avatar.id, raw_error, exc_info=True)
+            raise ServiceError(
+                detail="Failed to save avatar image. Please try again later.",
+                debug_detail=raw_error,
+                status_code=502,
+            )
+
+    avatar.refresh_from_db()
+
+    if should_trigger_today_regeneration:
+        try:
+            from outfits.services import trigger_today_auto_job_for_avatar
+            trigger_today_auto_job_for_avatar(avatar)
+        except Exception as trigger_err:
+            logger.error("Failed to trigger Today's Look regeneration for avatar %s: %s", avatar.id, trigger_err)
 
     return avatar
