@@ -118,10 +118,12 @@ if 'test' in sys.argv:
         }
     }
 else:
+    conn_max_age = int(os.getenv("CONN_MAX_AGE", "600"))
     DATABASES = {
         "default": dj_database_url.parse(
             os.getenv("DATABASE_URL"),
-            conn_max_age=600,
+            conn_max_age=conn_max_age,
+            conn_health_checks=True,
             ssl_require=True,
         )
     }
