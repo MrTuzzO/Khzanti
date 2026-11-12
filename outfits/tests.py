@@ -3484,3 +3484,191 @@ class TodayLookAvatarAutoRegenerationTestCase(APITestCase):
         self.assertEqual(set(current_job.wardrobe_items.all()), {self.top, self.bottom})
         # Replacement job deleted
         self.assertFalse(OutfitJob.objects.filter(id=rep_job.id).exists())
+
+    def test_14_avatar_generated_yesterday_saved_today_triggers_regeneration(self, mock_submit, mock_cloud):
+        """Avatar generated yesterday but saved today triggers Today's Look regeneration."""
+        today_date = timezone.now().date()
+        yesterday = timezone.now() - timezone.timedelta(days=1)
+        from outfits.services import apply_auto_replacement_to_today_job
+
+        # Today's look was initially created using the default avatar
+        current_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=self.default_avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            result_image="https://res.cloudinary.com/test/default_today.png",
+        )
+        current_job.wardrobe_items.set([self.top, self.bottom])
+
+        # Custom avatar generated yesterday, but user saves it today
+        avatar_yesterday = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/yesterday.png",
+            result_image="avatars/result/yesterday.png",
+            is_saved=True,
+            saved_at=timezone.now(),
+        )
+        Avatar.objects.filter(id=avatar_yesterday.id).update(created_at=yesterday)
+
+        # GET /api/v1/outfits/today/ triggers replacement try-on submission
+        mock_submit.reset_mock()
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/today/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_submit.assert_called_once()
+        rep_job = mock_submit.call_args[0][0]
+        self.assertEqual(rep_job.avatar_id, avatar_yesterday.id)
+
+        # When replacement try-on completes, it successfully updates today's look
+        rep_job.status = JobStatus.DONE
+        rep_job.fal_cdn_url = "https://v3b.fal.media/look_yesterday.png"
+        rep_job.save()
+
+        apply_auto_replacement_to_today_job(rep_job)
+        current_job.refresh_from_db()
+        self.assertEqual(current_job.avatar_id, avatar_yesterday.id)
+        self.assertEqual(current_job.fal_cdn_url, "https://v3b.fal.media/look_yesterday.png")
+
+    def test_15_avatar_generated_several_days_ago_saved_today_triggers_regeneration(self, mock_submit, mock_cloud):
+        """Avatar generated 5 days ago but saved today replaces an outfit with another avatar."""
+        today_date = timezone.now().date()
+        five_days_ago = timezone.now() - timezone.timedelta(days=5)
+        three_days_ago = timezone.now() - timezone.timedelta(days=3)
+        from outfits.services import apply_auto_replacement_to_today_job
+
+        # Older avatar saved 3 days ago
+        older_saved_avatar = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            result_image="avatars/result/three_days_ago.png",
+            is_saved=True,
+            saved_at=three_days_ago,
+        )
+        Avatar.objects.filter(id=older_saved_avatar.id).update(created_at=three_days_ago)
+
+        current_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=older_saved_avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            result_image="https://res.cloudinary.com/test/look_3days.png",
+        )
+        current_job.wardrobe_items.set([self.top, self.bottom])
+
+        # An avatar created 5 days ago is now saved today
+        avatar_5days_saved_today = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            result_image="avatars/result/five_days.png",
+            is_saved=True,
+            saved_at=timezone.now(),
+        )
+        Avatar.objects.filter(id=avatar_5days_saved_today.id).update(created_at=five_days_ago)
+
+        # GET /api/v1/outfits/today/
+        mock_submit.reset_mock()
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/today/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_submit.assert_called_once()
+        rep_job = mock_submit.call_args[0][0]
+        self.assertEqual(rep_job.avatar_id, avatar_5days_saved_today.id)
+
+        rep_job.status = JobStatus.DONE
+        rep_job.fal_cdn_url = "https://v3b.fal.media/look_5days.png"
+        rep_job.save()
+
+        apply_auto_replacement_to_today_job(rep_job)
+        current_job.refresh_from_db()
+        self.assertEqual(current_job.avatar_id, avatar_5days_saved_today.id)
+
+    def test_16_saving_same_avatar_again_does_not_create_duplicate_jobs(self, mock_submit, mock_cloud):
+        """Saving an avatar that is already active on Today's Look does not trigger regeneration."""
+        today_date = timezone.now().date()
+        from outfits.services import trigger_today_auto_job_for_avatar
+
+        avatar = self._create_saved_custom_avatar("https://v3b.fal.media/active_avatar.png")
+        current_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=avatar,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            result_image="https://res.cloudinary.com/test/active_look.png",
+        )
+        current_job.wardrobe_items.set([self.top, self.bottom])
+
+        mock_submit.reset_mock()
+        # Trigger save on the same avatar
+        trigger_today_auto_job_for_avatar(avatar)
+        mock_submit.assert_not_called()
+
+        # Repeated GET requests also don't submit
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/v1/outfits/today/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_submit.assert_not_called()
+        self.assertEqual(resp.data["data"]["avatar"], avatar.id)
+
+    def test_17_newer_saved_avatar_cannot_be_overwritten_by_older_replacement_webhook(self, mock_submit, mock_cloud):
+        """A late webhook from an older saved avatar cannot overwrite Today's Look using a newer saved avatar."""
+        today_date = timezone.now().date()
+        from outfits.services import apply_auto_replacement_to_today_job
+
+        time_earlier = timezone.now() - timezone.timedelta(minutes=10)
+        time_newer = timezone.now()
+
+        avatar_older_save = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            result_image="avatars/result/older_save.png",
+            is_saved=True,
+            saved_at=time_earlier,
+        )
+        avatar_newer_save = Avatar.objects.create(
+            user=self.user,
+            is_default=False,
+            status=Avatar.JobStatus.DONE,
+            result_image="avatars/result/newer_save.png",
+            is_saved=True,
+            saved_at=time_newer,
+        )
+
+        # Today's look has already been upgraded to avatar_newer_save
+        current_job = OutfitJob.objects.create(
+            user=self.user,
+            avatar=avatar_newer_save,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.AUTO,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/look_newer.png",
+        )
+        current_job.wardrobe_items.set([self.top, self.bottom])
+
+        # An older replacement webhook arrives for avatar_older_save
+        stale_rep = OutfitJob.objects.create(
+            user=self.user,
+            avatar=avatar_older_save,
+            scheduled_date=today_date,
+            trigger_type=TriggerType.MANUAL,
+            status=JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/stale_older.png",
+            internal_error_detail=f"auto_replacement:{avatar_older_save.id}",
+        )
+        stale_rep.wardrobe_items.set([self.top, self.bottom])
+
+        apply_auto_replacement_to_today_job(stale_rep)
+
+        # Today's look is protected and still points to avatar_newer_save
+        current_job.refresh_from_db()
+        self.assertEqual(current_job.avatar_id, avatar_newer_save.id)
+        self.assertEqual(current_job.fal_cdn_url, "https://v3b.fal.media/look_newer.png")
+        self.assertFalse(OutfitJob.objects.filter(id=stale_rep.id).exists())
