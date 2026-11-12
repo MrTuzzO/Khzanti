@@ -632,7 +632,8 @@ class AvatarAPIEndpointsTestCase(APITestCase):
         with patch("requests.get", return_value=mock_resp) as mock_get, patch(
             "outfits.services.trigger_today_auto_job_for_avatar"
         ) as mock_trigger:
-            saved = save_avatar_to_cloudinary(avatar)
+            with self.captureOnCommitCallbacks(execute=True):
+                saved = save_avatar_to_cloudinary(avatar)
             mock_get.assert_called_once_with("https://v3b.fal.media/valid_completed.png", timeout=30)
             mock_trigger.assert_called_once_with(avatar)
 
@@ -1014,3 +1015,485 @@ class SystemDefaultAvatarVerificationTestCase(APITestCase):
             self.assertIsNotNone(rec, f"Missing default avatar for {gender} {style}")
             self.assertEqual(rec.result_image.name, expected_id)
 
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class AvatarAutoSaveRetryTestCase(APITestCase):
+    """Regression tests for the auto-save retry mechanism in sync_avatar_status."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="retrytestuser@example.com",
+            name="Retry Test User",
+            password="password123",
+        )
+        self.client.force_authenticate(user=self.user)
+        self.dummy_image = SimpleUploadedFile(
+            name="retry_selfie.png",
+            content=VALID_PNG_BYTES,
+            content_type="image/png",
+        )
+
+    def test_done_unsaved_avatar_retries_cloudinary_on_status_check(self, mock_cloud):
+        """
+        A DONE avatar with is_saved=False retries Cloudinary upload
+        when sync_avatar_status is called, WITHOUT calling fal.ai again.
+        """
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_request_id="req_done_unsaved_001",
+            fal_cdn_url="https://v3b.fal.media/done_unsaved.png",
+            is_saved=False,
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("fal_client.status") as mock_fal_status, \
+             patch("fal_client.result") as mock_fal_result, \
+             patch("requests.get", return_value=mock_resp):
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "done")
+        self.assertTrue(response.data["is_saved"])
+
+        # Must NOT call fal.ai — the avatar is already DONE
+        mock_fal_status.assert_not_called()
+        mock_fal_result.assert_not_called()
+
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+        self.assertTrue(bool(avatar.result_image))
+        self.assertIsNotNone(avatar.saved_at)
+
+    def test_done_unsaved_avatar_retry_failure_keeps_unsaved(self, mock_cloud):
+        """
+        A DONE avatar with is_saved=False that fails Cloudinary retry
+        remains DONE + unsaved (not FAILED).
+        """
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_request_id="req_done_retry_fail_002",
+            fal_cdn_url="https://v3b.fal.media/retry_fail.png",
+            is_saved=False,
+        )
+
+        with patch("fal_client.status") as mock_fal_status, \
+             patch("requests.get", side_effect=Exception("Cloudinary down")):
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "done")
+        self.assertFalse(response.data["is_saved"])
+
+        mock_fal_status.assert_not_called()
+
+        avatar.refresh_from_db()
+        self.assertEqual(avatar.status, Avatar.JobStatus.DONE)
+        self.assertFalse(avatar.is_saved)
+
+    def test_done_saved_avatar_does_not_retry(self, mock_cloud):
+        """A DONE+saved avatar returns immediately without any external calls."""
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_request_id="req_done_saved_003",
+            fal_cdn_url="https://v3b.fal.media/already_saved.png",
+            is_saved=True,
+            result_image="avatars/result/already_saved.png",
+        )
+
+        with patch("fal_client.status") as mock_fal_status, \
+             patch("requests.get") as mock_get:
+            response = self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_fal_status.assert_not_called()
+        mock_get.assert_not_called()
+
+    def test_repeated_status_checks_do_not_duplicate_uploads(self, mock_cloud):
+        """Multiple rapid status checks only upload to Cloudinary once."""
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_request_id="req_rapid_004",
+            fal_cdn_url="https://v3b.fal.media/rapid.png",
+            is_saved=False,
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+            self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+            self.client.get(f"/api/v1/avatars/{avatar.id}/status/")
+
+        # Upload happens only once — subsequent calls see is_saved=True
+        self.assertEqual(mock_get.call_count, 1)
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+
+    def test_resave_already_saved_avatar_updates_saved_at_and_triggers_regeneration(self, mock_cloud):
+        """Re-saving an already-saved avatar updates saved_at and triggers Today's Look."""
+        from avatars.services import save_avatar_to_cloudinary
+        from django.utils import timezone
+        import datetime
+
+        old_time = timezone.now() - datetime.timedelta(days=3)
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/resave.png",
+            is_saved=True,
+            saved_at=old_time,
+            result_image="avatars/result/resave.png",
+        )
+
+        with patch("requests.get") as mock_get, \
+             patch("outfits.services.trigger_today_auto_job_for_avatar") as mock_trigger:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = save_avatar_to_cloudinary(avatar)
+
+        # No Cloudinary re-upload
+        mock_get.assert_not_called()
+        # But regeneration IS triggered
+        mock_trigger.assert_called_once()
+
+        avatar.refresh_from_db()
+        self.assertTrue(avatar.is_saved)
+        self.assertGreater(avatar.saved_at, old_time)
+
+    def test_serializer_output_does_not_expose_saved_at(self, mock_cloud):
+        """AvatarSerializer must not expose saved_at — it's internal only."""
+        from avatars.serializers import AvatarSerializer
+
+        avatar = Avatar.objects.create(
+            user=self.user,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/serial.png",
+            is_saved=True,
+            result_image="avatars/result/serial.png",
+        )
+
+        data = AvatarSerializer(avatar).data
+        self.assertNotIn("saved_at", data)
+
+        expected_fields = {
+            "id", "status", "gender", "style", "is_default", "is_preferred",
+            "is_saved", "source_photo", "result_image", "fal_cdn_url",
+            "error_message", "created_at", "updated_at",
+        }
+        self.assertEqual(set(data.keys()), expected_fields)
+
+
+@patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
+class RepairAvatarCloudinarySyncCommandTestCase(APITestCase):
+    """Unit and regression tests for repair_avatar_cloudinary_sync management command."""
+
+    def setUp(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.user_a = User.objects.create_user(
+            email="repair_user_a@example.com",
+            name="Repair User A",
+            password="password123",
+        )
+        self.user_b = User.objects.create_user(
+            email="repair_user_b@example.com",
+            name="Repair User B",
+            password="password123",
+        )
+        self.dummy_image = SimpleUploadedFile(
+            name="test_repair.png",
+            content=VALID_PNG_BYTES,
+            content_type="image/png",
+        )
+
+    def test_dry_run_does_not_modify_database_or_upload(self, mock_cloud):
+        from django.core.management import call_command
+        import io
+
+        av = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/dry_run.png",
+            is_saved=False,
+        )
+
+        out = io.StringIO()
+        with patch("requests.get") as mock_get, patch("requests.head") as mock_head:
+            call_command("repair_avatar_cloudinary_sync", "--dry-run", stdout=out)
+            mock_get.assert_not_called()
+            mock_head.assert_not_called()
+
+        av.refresh_from_db()
+        self.assertFalse(av.is_saved)
+        self.assertFalse(bool(av.result_image))
+        self.assertIsNone(av.saved_at)
+
+        output = out.getvalue()
+        self.assertIn("Mode: DRY-RUN", output)
+        self.assertIn(f"Avatar {av.id}", output)
+        self.assertIn("Repaired assets:                  1", output)
+
+    def test_live_repair_uploads_sets_saved_and_backfills_saved_at(self, mock_cloud):
+        from django.core.management import call_command
+        import io
+
+        # 1. Avatar needing repair
+        av1 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/repair_1.png",
+            is_saved=False,
+        )
+
+        # 2. Already saved avatar with accessible Cloudinary asset but missing saved_at
+        av2 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/repair_2.png",
+            is_saved=True,
+            result_image="avatars/result/repair_2.png",
+            saved_at=None,
+        )
+
+        # 3. Incomplete avatar (should be skipped)
+        av3 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.PROCESSING,
+            fal_cdn_url="",
+            is_saved=False,
+        )
+
+        # 4. Failed avatar (should be skipped)
+        av4 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.FAILED,
+            fal_cdn_url="https://v3b.fal.media/repair_failed.png",
+            is_saved=False,
+        )
+
+        mock_head_resp = MagicMock()
+        mock_head_resp.status_code = 200
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.content = VALID_PNG_BYTES
+        mock_get_resp.raise_for_status = MagicMock()
+
+        out = io.StringIO()
+        with patch("requests.head", return_value=mock_head_resp), \
+             patch("requests.get", return_value=mock_get_resp) as mock_get, \
+             patch("outfits.services.trigger_today_auto_job_for_avatar") as mock_trigger:
+            call_command("repair_avatar_cloudinary_sync", stdout=out)
+
+            # Never triggers Today's Look regeneration for historical records
+            mock_trigger.assert_not_called()
+            # Uploads only the unsaved avatar
+            mock_get.assert_called_once_with("https://v3b.fal.media/repair_1.png", timeout=30)
+
+        av1.refresh_from_db()
+        self.assertTrue(av1.is_saved)
+        self.assertTrue(bool(av1.result_image))
+        self.assertEqual(av1.saved_at, av1.created_at)
+
+        av2.refresh_from_db()
+        self.assertTrue(av2.is_saved)
+        self.assertEqual(av2.saved_at, av2.created_at)
+
+        av3.refresh_from_db()
+        self.assertFalse(av3.is_saved)
+
+        av4.refresh_from_db()
+        self.assertFalse(av4.is_saved)
+
+        output = out.getvalue()
+        self.assertIn("Repaired assets:                  1", output)
+        self.assertIn("Backfilled timestamps:            1", output)
+        self.assertIn("Skipped - Incomplete/In-flight:   1", output)
+        self.assertIn("Skipped - Failed status:          1", output)
+
+    def test_inaccessible_cloudinary_asset_recovers_from_fal_cdn(self, mock_cloud):
+        """When Cloudinary returns 404 for an existing image, recover from fal_cdn_url."""
+        from django.core.management import call_command
+        import io
+
+        av = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/recovery_source.png",
+            is_saved=True,
+            result_image="avatars/result/broken_cloud.png",
+        )
+
+        mock_head_404 = MagicMock()
+        mock_head_404.status_code = 404
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.content = VALID_PNG_BYTES
+        mock_get_resp.raise_for_status = MagicMock()
+
+        out = io.StringIO()
+        with patch("requests.head", return_value=mock_head_404), \
+             patch("requests.get", return_value=mock_get_resp) as mock_get:
+            call_command("repair_avatar_cloudinary_sync", stdout=out)
+            mock_get.assert_called_once_with("https://v3b.fal.media/recovery_source.png", timeout=30)
+
+        av.refresh_from_db()
+        self.assertTrue(av.is_saved)
+        output = out.getvalue()
+        self.assertIn("Inaccessible Cloudinary assets:   1", output)
+        self.assertIn("Repaired assets:                  1", output)
+
+    def test_inaccessible_cloudinary_without_fal_cdn_preserves_record(self, mock_cloud):
+        """When Cloudinary returns 404 and fal_cdn_url is missing, preserve record and report."""
+        from django.core.management import call_command
+        import io
+
+        av = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="",
+            is_saved=True,
+            result_image="avatars/result/broken_cloud_no_src.png",
+        )
+
+        mock_head_404 = MagicMock()
+        mock_head_404.status_code = 404
+
+        out = io.StringIO()
+        with patch("requests.head", return_value=mock_head_404), \
+             patch("requests.get") as mock_get:
+            call_command("repair_avatar_cloudinary_sync", stdout=out)
+            mock_get.assert_not_called()
+
+        av.refresh_from_db()
+        self.assertEqual(av.result_image.name, "avatars/result/broken_cloud_no_src.png")
+        output = out.getvalue()
+        self.assertIn("Inaccessible Cloudinary assets:   1", output)
+        self.assertIn("Missing fal.ai sources:           1", output)
+        self.assertIn("Repaired assets:                  0", output)
+
+    def test_repair_command_is_idempotent_and_user_id_filtering(self, mock_cloud):
+        from django.core.management import call_command
+        import io
+
+        av_a = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/user_a.png",
+            is_saved=False,
+        )
+        av_b = Avatar.objects.create(
+            user=self.user_b,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/user_b.png",
+            is_saved=False,
+        )
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.content = VALID_PNG_BYTES
+        mock_get_resp.raise_for_status = MagicMock()
+
+        mock_head_resp = MagicMock()
+        mock_head_resp.status_code = 200
+
+        out = io.StringIO()
+        # Filter strictly to user_a
+        with patch("requests.get", return_value=mock_get_resp) as mock_get:
+            call_command("repair_avatar_cloudinary_sync", f"--user-id={self.user_a.id}", stdout=out)
+            self.assertEqual(mock_get.call_count, 1)
+
+        av_a.refresh_from_db()
+        av_b.refresh_from_db()
+        self.assertTrue(av_a.is_saved)
+        self.assertFalse(av_b.is_saved)
+
+        # Running again for user_a verifies existing asset without re-downloading
+        out2 = io.StringIO()
+        with patch("requests.head", return_value=mock_head_resp), \
+             patch("requests.get") as mock_get_second:
+            call_command("repair_avatar_cloudinary_sync", f"--user-id={self.user_a.id}", stdout=out2)
+            mock_get_second.assert_not_called()
+
+        output2 = out2.getvalue()
+        self.assertIn("Verified assets:                  1", output2)
+        self.assertIn("Repaired assets:                  0", output2)
+
+    def test_individual_failure_does_not_abort_subsequent_repairs(self, mock_cloud):
+        import requests
+        from django.core.management import call_command
+        import io
+
+        av1 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/broken.png",
+            is_saved=False,
+        )
+        av2 = Avatar.objects.create(
+            user=self.user_a,
+            source_photo=self.dummy_image,
+            style=Avatar.Style.REALISTIC,
+            status=Avatar.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/working.png",
+            is_saved=False,
+        )
+
+        def side_effect(url, **kwargs):
+            if "broken" in url:
+                raise requests.RequestException("404 Not Found")
+            mock = MagicMock()
+            mock.content = VALID_PNG_BYTES
+            mock.raise_for_status = MagicMock()
+            return mock
+
+        out = io.StringIO()
+        with patch("requests.get", side_effect=side_effect):
+            call_command("repair_avatar_cloudinary_sync", stdout=out)
+
+        av1.refresh_from_db()
+        av2.refresh_from_db()
+        self.assertFalse(av1.is_saved)
+        self.assertTrue(av2.is_saved)
+
+        output = out.getvalue()
+        self.assertIn("Failures during repair:           1", output)
+        self.assertIn("Repaired assets:                  1", output)
