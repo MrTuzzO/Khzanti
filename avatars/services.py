@@ -254,15 +254,33 @@ def submit_avatar_job(avatar: Avatar) -> None:
 def sync_avatar_status(avatar: Avatar) -> Avatar:
     """
     Checks job status with fal.ai and updates DB accordingly.
-    Idempotent: returns immediately if avatar is already 'done', 'failed',
+    Idempotent: returns immediately if avatar is already done+saved, failed,
     or lacks a fal_request_id.
+
+    For avatars that are DONE but NOT saved (e.g. Cloudinary upload failed on
+    the initial attempt), retries the Cloudinary save WITHOUT calling fal.ai
+    again — the fal_cdn_url is already present.
     """
-    if (
-        avatar.status in (Avatar.JobStatus.DONE, Avatar.JobStatus.FAILED)
-        or not avatar.fal_request_id
-    ):
+    if avatar.status == Avatar.JobStatus.FAILED or not avatar.fal_request_id:
         return avatar
 
+    # DONE + already saved → nothing to do
+    if avatar.status == Avatar.JobStatus.DONE and avatar.is_saved:
+        return avatar
+
+    # DONE + NOT saved → retry Cloudinary save (no fal.ai call needed)
+    if avatar.status == Avatar.JobStatus.DONE and not avatar.is_saved:
+        if avatar.fal_cdn_url:
+            try:
+                save_avatar_to_cloudinary(avatar)
+            except Exception as save_err:
+                logger.error(
+                    "Retry auto-saving avatar %s to Cloudinary failed: %s",
+                    avatar.id, save_err, exc_info=True,
+                )
+        return avatar
+
+    # Status is PENDING or PROCESSING → poll fal.ai
     try:
         status_info = fal_client.status(FAL_MODEL_ID, avatar.fal_request_id)
         if isinstance(status_info, fal_client.Completed):
@@ -308,7 +326,10 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
             try:
                 save_avatar_to_cloudinary(avatar)
             except Exception as save_err:
-                logger.error("Auto-saving avatar %s to Cloudinary failed: %s", avatar.id, save_err)
+                logger.error(
+                    "Auto-saving avatar %s to Cloudinary failed: %s",
+                    avatar.id, save_err, exc_info=True,
+                )
     except Exception as exc:
         raw_error = str(exc)
         logger.error("Avatar job %s status sync failed: %s", avatar.id, raw_error, exc_info=True)
@@ -320,6 +341,18 @@ def sync_avatar_status(avatar: Avatar) -> Avatar:
     return avatar
 
 
+def _safe_trigger_today_regeneration(target_avatar: Avatar) -> None:
+    try:
+        from outfits.services import trigger_today_auto_job_for_avatar
+        trigger_today_auto_job_for_avatar(target_avatar)
+    except Exception as trigger_err:
+        logger.error(
+            "Failed to trigger Today's Look regeneration for avatar %s: %s",
+            getattr(target_avatar, "id", None),
+            trigger_err,
+        )
+
+
 def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
     """
     Explicitly downloads the generated avatar from fal.ai CDN URL and uploads it to Cloudinary storage.
@@ -327,9 +360,6 @@ def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
     duplicate uploads for the same Avatar record.
     Refuses to process avatars unless status is DONE and a valid result image URL exists.
     """
-    if avatar.is_saved:
-        return avatar
-
     from django.db import transaction
     from core.exceptions import ServiceError
 
@@ -346,16 +376,20 @@ def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
             status_code=400,
         )
 
-    should_trigger_today_regeneration = False
-
     with transaction.atomic():
         locked_avatar = Avatar.objects.select_for_update().filter(id=avatar.id).first()
         if not locked_avatar:
             raise ServiceError(detail="Avatar not found.", status_code=404)
 
         if locked_avatar.is_saved:
-            avatar.is_saved = True
-            avatar.result_image = locked_avatar.result_image
+            # Already saved — update saved_at to now so re-saving makes this
+            # the "latest" avatar and trigger Today's Look regeneration on commit.
+            locked_avatar.saved_at = timezone.now()
+            locked_avatar.save(update_fields=["saved_at", "updated_at"])
+            avatar.refresh_from_db()
+
+            if locked_avatar.user and not locked_avatar.is_default:
+                transaction.on_commit(lambda: _safe_trigger_today_regeneration(avatar))
             return avatar
 
         if locked_avatar.status != Avatar.JobStatus.DONE:
@@ -385,7 +419,7 @@ def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
             avatar.is_saved = True
 
             if locked_avatar.user and not locked_avatar.is_default and locked_avatar.is_saved:
-                should_trigger_today_regeneration = True
+                transaction.on_commit(lambda: _safe_trigger_today_regeneration(avatar))
         except Exception as exc:
             if isinstance(exc, ServiceError):
                 raise exc
@@ -398,12 +432,4 @@ def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
             )
 
     avatar.refresh_from_db()
-
-    if should_trigger_today_regeneration:
-        try:
-            from outfits.services import trigger_today_auto_job_for_avatar
-            trigger_today_auto_job_for_avatar(avatar)
-        except Exception as trigger_err:
-            logger.error("Failed to trigger Today's Look regeneration for avatar %s: %s", avatar.id, trigger_err)
-
     return avatar
