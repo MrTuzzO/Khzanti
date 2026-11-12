@@ -2,6 +2,7 @@ import logging
 import fal_client
 import requests
 from django.core.files.base import ContentFile
+from django.utils import timezone
 
 from .adapters import get_profile_constraints
 from .models import Avatar
@@ -377,7 +378,8 @@ def save_avatar_to_cloudinary(avatar: Avatar) -> Avatar:
             filename = f"avatar_{locked_avatar.id}.png"
             locked_avatar.result_image.save(filename, ContentFile(img_resp.content), save=False)
             locked_avatar.is_saved = True
-            locked_avatar.save(update_fields=["result_image", "is_saved", "updated_at"])
+            locked_avatar.saved_at = timezone.now()
+            locked_avatar.save(update_fields=["result_image", "is_saved", "saved_at", "updated_at"])
 
             avatar.result_image = locked_avatar.result_image
             avatar.is_saved = True
