@@ -133,6 +133,156 @@ class TryOnPromptBuilderTestCase(APITestCase):
         self.assertIn("MULTI-GARMENT PHYSICAL LAYERING", prompt)
         self.assertIn("shirts tucked into/under pants or jackets", prompt)
 
+    def test_clothing_receives_original_garment_instructions(self):
+        cat_dress, _ = Category.objects.get_or_create(name="Dress")
+        cat_hijab, _ = Category.objects.get_or_create(name="Hijab")
+        cat_shoes, _ = Category.objects.get_or_create(name="Shoes")
+
+        item_dress = WardrobeItem.objects.create(user=self.user, category=cat_dress, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_dress, status=ItemAnalysis.JobStatus.DONE, color="red", description="evening maxi dress")
+
+        item_hijab = WardrobeItem.objects.create(user=self.user, category=cat_hijab, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_hijab, status=ItemAnalysis.JobStatus.DONE, color="black", description="chiffon hijab")
+
+        item_shoes = WardrobeItem.objects.create(user=self.user, category=cat_shoes, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_shoes, status=ItemAnalysis.JobStatus.DONE, color="white", description="leather sneakers")
+
+        prompt = build_try_on_prompt(self.avatar_real, [self.item_top, item_dress, item_hijab, item_shoes])
+
+        for cat_name in ["Tops", "Dress", "Hijab", "Shoes"]:
+            self.assertIn(f"Reference {cat_name}", prompt)
+        self.assertIn("Extract and faithfully reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)", prompt)
+
+    def test_eyewear_receives_face_placement_instructions(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_glasses = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(
+            wardrobe_item=item_glasses,
+            status=ItemAnalysis.JobStatus.DONE,
+            color="black",
+            description="designer sunglasses with dark lenses",
+        )
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_glasses])
+
+        self.assertIn("Image 2: Reference Accessories (color: black, description: designer sunglasses with dark lenses)", prompt)
+        self.assertIn("This is an eyewear accessory. Naturally position it worn on the avatar's face over the eyes", prompt)
+        self.assertIn("aligning the frames realistically with the bridge of the nose, temples, and ears", prompt)
+        self.assertIn("Preserve the avatar's facial identity, facial structure, skin appearance, and expression", prompt)
+        # Verify garment-specific words are NOT used for eyewear
+        self.assertNotIn("collar, sleeves, seams", prompt.split("Image 2:")[1].split("3. NATURAL")[0])
+
+    def test_bags_receive_appropriate_carrying_and_strap_instructions(self):
+        cat_bag, _ = Category.objects.get_or_create(name="Bag")
+
+        # 1. Tote / Handbag
+        item_tote = WardrobeItem.objects.create(user=self.user, category=cat_bag, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_tote, status=ItemAnalysis.JobStatus.DONE, color="tan", description="leather tote bag")
+
+        # 2. Crossbody Bag
+        item_crossbody = WardrobeItem.objects.create(user=self.user, category=cat_bag, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_crossbody, status=ItemAnalysis.JobStatus.DONE, color="brown", description="crossbody shoulder bag with strap")
+
+        # 3. Backpack
+        item_backpack = WardrobeItem.objects.create(user=self.user, category=cat_bag, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_backpack, status=ItemAnalysis.JobStatus.DONE, color="navy", description="canvas backpack")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_tote, item_crossbody, item_backpack])
+
+        self.assertIn("This is a bag accessory. Position it held naturally in the avatar's hand or worn draped over the shoulder or arm", prompt)
+        self.assertIn("This is a crossbody bag accessory. Position the bag resting naturally at the hip or side with the strap extending diagonally across the torso", prompt)
+        self.assertIn("This is a backpack accessory. Naturally position it resting on the avatar's back and shoulders with realistic strap placement", prompt)
+
+    def test_watches_and_bracelets_receive_wrist_placement_instructions(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_watch = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_watch, status=ItemAnalysis.JobStatus.DONE, color="gold", description="stainless steel wristwatch")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_watch])
+
+        self.assertIn("This is a wrist accessory. Naturally position it worn around the avatar's wrist", prompt)
+        self.assertIn("Maintain realistic human wrist proportions and life-sized scale (a watch or bracelet must remain wrist-sized, not enlarged)", prompt)
+
+    def test_necklaces_and_earrings_receive_placement_instructions(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_necklace = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_necklace, status=ItemAnalysis.JobStatus.DONE, color="silver", description="pendant chain necklace")
+
+        item_earring = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_earring, status=ItemAnalysis.JobStatus.DONE, color="gold", description="small hoop earrings")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_necklace, item_earring])
+
+        self.assertIn("This is a necklace accessory. Position it naturally draped around the neck and collarbone, respecting the clothing neckline", prompt)
+        self.assertIn("This is an earring accessory. Position it naturally attached to the avatar's ears, aligning realistically with the earlobes and hair", prompt)
+
+    def test_belts_receive_waist_placement_instructions(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_belt = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_belt, status=ItemAnalysis.JobStatus.DONE, color="brown", description="leather waist belt with brass buckle")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_belt])
+
+        self.assertIn("This is a belt accessory. Position it fastened naturally around the waist or waistband, integrating seamlessly with the selected clothing", prompt)
+
+    def test_multiple_accessories_individually_identified(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        cat_bag, _ = Category.objects.get_or_create(name="Bag")
+
+        item_glasses = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_glasses, status=ItemAnalysis.JobStatus.DONE, color="black", description="sunglasses")
+
+        item_bag = WardrobeItem.objects.create(user=self.user, category=cat_bag, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_bag, status=ItemAnalysis.JobStatus.DONE, color="red", description="handbag")
+
+        item_watch = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_watch, status=ItemAnalysis.JobStatus.DONE, color="silver", description="wristwatch")
+
+        prompt = build_try_on_prompt(self.avatar_real, [self.item_top, item_glasses, item_bag, item_watch])
+
+        self.assertIn("Image 2: Reference Tops", prompt)
+        self.assertIn("Extract and faithfully reconstruct this garment's design identity", prompt)
+        self.assertIn("Image 3: Reference Accessories (color: black, description: sunglasses)", prompt)
+        self.assertIn("This is an eyewear accessory", prompt)
+        self.assertIn("Image 4: Reference Bag (color: red, description: handbag)", prompt)
+        self.assertIn("This is a bag accessory", prompt)
+        self.assertIn("Image 5: Reference Accessories (color: silver, description: wristwatch)", prompt)
+        self.assertIn("This is a wrist accessory", prompt)
+
+    def test_face_preservation_does_not_prohibit_eyewear(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_glasses = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_glasses, status=ItemAnalysis.JobStatus.DONE, color="gold", description="reading glasses")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_glasses])
+
+        # Verifies face preservation directive exists
+        self.assertIn("STRICT PRESERVATION: Do NOT repaint, restyle, regenerate, beautify, or alter the avatar", prompt)
+        # Verifies legitimate accessory interaction is permitted
+        self.assertIn("ACCESSORY & EYEWEAR POSITIONING ON AVATAR", prompt)
+        self.assertIn("allow the natural visual placement of the accessory on the avatar (e.g. glasses naturally resting over the eyes and nose bridge)", prompt)
+
+    def test_unknown_categories_safe_fallback(self):
+        cat_custom, _ = Category.objects.get_or_create(name="Vintage Collection")
+        item_custom = WardrobeItem.objects.create(user=self.user, category=cat_custom, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_custom, status=ItemAnalysis.JobStatus.DONE, color="cyan", description="handcrafted item")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_custom])
+
+        # Falls back safely to standard reconstruction
+        self.assertIn("Image 2: Reference Vintage Collection (color: cyan, description: handcrafted item)", prompt)
+        self.assertIn("Extract and faithfully reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)", prompt)
+
+    def test_realistic_scale_directives_present(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_acc = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_acc, status=ItemAnalysis.JobStatus.DONE, color="silver", description="ring")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_acc])
+
+        self.assertIn("ACCESSORIES & REALISTIC SCALE: All accessories (bags, glasses, watches, jewelry, belts, hats, scarves) must maintain realistic, life-sized proportions relative to the human body", prompt)
+        self.assertIn("A watch must remain wrist-sized, glasses must fit the face, a handbag must have realistic dimensions, and jewelry must not be enlarged", prompt)
+
 
 @patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
 class TryOnSaveAPITestCase(APITestCase):
