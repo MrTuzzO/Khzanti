@@ -1,3 +1,4 @@
+import io
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -503,6 +504,283 @@ class WardrobeNullNormalizationTests(APITestCase):
         self.assertEqual(res.data["analysis"]["color"], "navy")
         self.assertEqual(res.data["analysis"]["description"], "Navy polo shirt")
         self.assertIsNone(res.data["analysis"]["error_message"])
+
+
+def create_transparent_test_image(size=(400, 300), box=(100, 50, 200, 150)):
+    """Creates an RGBA image with transparent background and an opaque colored rectangle."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    for x in range(box[0], box[2]):
+        for y in range(box[1], box[3]):
+            img.putpixel((x, y), (255, 0, 0, 255))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@patch("cloudinary.uploader.upload", return_value={"public_id": "test_public_id", "url": "https://res.cloudinary.com/test/image/upload/v1/test.png"})
+class AccessoryImageNormalizationTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="normuser", name="Norm User", email="normuser@example.com", password="password123"
+        )
+        self.cat_acc = Category.objects.create(name="Accessories")
+        self.cat_tops = Category.objects.create(name="Tops")
+        self.client.force_authenticate(user=self.user)
+
+    def test_normalize_accessory_crops_alpha_and_centers_on_1024_canvas(self, mock_cloud_upload):
+        from wardrobe_items_ai.services import normalize_accessory_image
+
+        raw_png = create_transparent_test_image(size=(500, 500), box=(50, 50, 250, 150))
+        normalized = normalize_accessory_image(raw_png, category_name="Accessories", description="sunglasses")
+
+        img = Image.open(BytesIO(normalized))
+        self.assertEqual(img.size, (1024, 1024))
+        self.assertEqual(img.mode, "RGBA")
+
+        # Verify alpha channel exists and bounding box is centered
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox()
+        self.assertIsNotNone(bbox)
+        # Bounding box should be centered inside 1024x1024 canvas
+        center_x = (bbox[0] + bbox[2]) / 2.0
+        center_y = (bbox[1] + bbox[3]) / 2.0
+        self.assertAlmostEqual(center_x, 512, delta=5)
+        self.assertAlmostEqual(center_y, 512, delta=5)
+
+    def test_normalize_accessory_preserves_aspect_ratio(self, mock_cloud_upload):
+        from wardrobe_items_ai.services import normalize_accessory_image
+
+        # Width = 200, Height = 100 -> Aspect ratio 2:1
+        raw_png = create_transparent_test_image(size=(600, 400), box=(100, 100, 300, 200))
+        normalized = normalize_accessory_image(raw_png, category_name="Accessories", description="sunglasses")
+
+        img = Image.open(BytesIO(normalized))
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox()
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        self.assertAlmostEqual(w / h, 2.0, delta=0.05)
+
+    def test_normalize_handles_fully_transparent_and_invalid_safely(self, mock_cloud_upload):
+        from wardrobe_items_ai.services import normalize_accessory_image
+
+        # Fully transparent image
+        fully_trans = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        buf = BytesIO()
+        fully_trans.save(buf, format="PNG")
+        res = normalize_accessory_image(buf.getvalue(), category_name="Accessories")
+        self.assertEqual(res, buf.getvalue())
+
+        # Corrupt bytes
+        corrupt = b"not_an_image_data"
+        res_corrupt = normalize_accessory_image(corrupt, category_name="Accessories")
+        self.assertEqual(res_corrupt, corrupt)
+
+    def test_save_wardrobe_item_normalizes_accessories_only(self, mock_cloud_upload):
+        from wardrobe_items_ai.services import save_wardrobe_item_to_cloudinary
+
+        # 1. Accessory item -> gets normalized to 1024x1024
+        acc_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.cat_acc,
+            image="wardrobe_items/originals/acc.png",
+        )
+        acc_analysis = ItemAnalysis.objects.create(
+            wardrobe_item=acc_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/acc.png",
+            description="designer glasses",
+        )
+
+        acc_raw_png = create_transparent_test_image(size=(400, 200), box=(50, 25, 250, 125))
+        mock_resp = MagicMock()
+        mock_resp.content = acc_raw_png
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp):
+            save_wardrobe_item_to_cloudinary(acc_analysis)
+
+        acc_analysis.refresh_from_db()
+        self.assertTrue(acc_analysis.is_saved)
+        self.assertTrue(bool(acc_analysis.processed_image))
+        # Inspect the file bytes passed to Cloudinary uploader
+        uploaded_file = mock_cloud_upload.call_args[0][0]
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+            data = uploaded_file.read()
+        else:
+            data = uploaded_file
+        saved_img = Image.open(BytesIO(data))
+        self.assertEqual(saved_img.size, (1024, 1024))
+
+        # 2. Clothing item (Tops) -> preserved raw without normalization
+        top_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.cat_tops,
+            image="wardrobe_items/originals/top.png",
+        )
+        top_analysis = ItemAnalysis.objects.create(
+            wardrobe_item=top_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/top.png",
+            description="cotton shirt",
+        )
+
+        mock_resp_top = MagicMock()
+        mock_resp_top.content = VALID_PNG_BYTES
+        mock_resp_top.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp_top):
+            save_wardrobe_item_to_cloudinary(top_analysis)
+
+        top_analysis.refresh_from_db()
+        self.assertTrue(top_analysis.is_saved)
+        self.assertTrue(bool(top_analysis.processed_image))
+        # Top image is preserved directly
+        uploaded_top = mock_cloud_upload.call_args[0][0]
+        if hasattr(uploaded_top, "seek"):
+            uploaded_top.seek(0)
+            top_data = uploaded_top.read()
+        else:
+            top_data = uploaded_top
+        self.assertEqual(top_data, VALID_PNG_BYTES)
+
+    def test_exif_orientation_transposition_on_upload(self, mock_cloud_upload):
+        from wardrobe_items_ai.serializers import apply_exif_orientation
+
+        # Create an image with EXIF orientation 6 (90 degrees CCW)
+        img = Image.new("RGB", (200, 100), color="blue")
+        exif = img.getexif()
+        exif[0x0112] = 6  # Rotated 90 degrees CW required
+        buf = BytesIO()
+        img.save(buf, format="JPEG", exif=exif)
+        buf.seek(0)
+        uploaded = SimpleUploadedFile("exif_test.jpg", buf.read(), content_type="image/jpeg")
+
+        corrected = apply_exif_orientation(uploaded)
+        corrected_img = Image.open(corrected)
+        # Transposed 90 degrees: (200, 100) becomes (100, 200)
+        self.assertEqual(corrected_img.size, (100, 200))
+
+    def test_save_wardrobe_item_concurrency_protection(self, mock_cloud_upload):
+        from wardrobe_items_ai.services import save_wardrobe_item_to_cloudinary
+
+        acc_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.cat_acc,
+            image="wardrobe_items/originals/concurrency.png",
+        )
+        analysis = ItemAnalysis.objects.create(
+            wardrobe_item=acc_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/acc_concurrent.png",
+            description="designer sunglasses",
+            is_saved=False,
+        )
+
+        acc_raw_png = create_transparent_test_image(size=(400, 200), box=(50, 25, 250, 125))
+        mock_resp = MagicMock()
+        mock_resp.content = acc_raw_png
+        mock_resp.raise_for_status = MagicMock()
+
+        # Simulate Worker 1 saving the item successfully
+        with patch("requests.get", return_value=mock_resp):
+            save_wardrobe_item_to_cloudinary(analysis)
+
+        self.assertEqual(mock_cloud_upload.call_count, 1)
+        analysis.refresh_from_db()
+        self.assertTrue(analysis.is_saved)
+
+        # Worker 2 attempts to save with a stale in-memory instance where is_saved=False
+        stale_instance = ItemAnalysis.objects.get(pk=analysis.pk)
+        stale_instance.is_saved = False  # Simulate stale in-memory instance
+
+        with patch("requests.get", return_value=mock_resp) as mock_get:
+            save_wardrobe_item_to_cloudinary(stale_instance)
+            # Recheck DB state prevents calling requests.get and prevents duplicate upload
+            mock_get.assert_not_called()
+
+        self.assertEqual(mock_cloud_upload.call_count, 1)
+        self.assertTrue(stale_instance.is_saved)
+
+    def test_repair_accessory_normalization_command(self, mock_cloud_upload):
+        from django.core.management import call_command
+
+        # 1. Unnormalized historical accessory
+        acc_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.cat_acc,
+            image="wardrobe_items/originals/acc_hist.png",
+        )
+        acc_analysis = ItemAnalysis.objects.create(
+            wardrobe_item=acc_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/acc_hist.png",
+            description="leather crossbody bag",
+            is_saved=True,
+        )
+        # 2. Clothing item (should be skipped by repair command)
+        top_item = WardrobeItem.objects.create(
+            user=self.user,
+            category=self.cat_tops,
+            image="wardrobe_items/originals/top_hist.png",
+        )
+        top_analysis = ItemAnalysis.objects.create(
+            wardrobe_item=top_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            fal_cdn_url="https://v3b.fal.media/top_hist.png",
+            description="linen shirt",
+            is_saved=True,
+        )
+
+        unnormalized_png = create_transparent_test_image(size=(500, 300), box=(50, 50, 200, 150))
+        mock_resp = MagicMock()
+        mock_resp.content = unnormalized_png
+        mock_resp.raise_for_status = MagicMock()
+
+        # Test A: DRY RUN
+        out_dry = io.StringIO()
+        call_command("repair_accessory_normalization", "--dry-run", stdout=out_dry)
+        dry_output = out_dry.getvalue()
+        self.assertIn("Mode: DRY-RUN", dry_output)
+        self.assertIn("DRY-RUN WOULD AUDIT/REPAIR", dry_output)
+        self.assertEqual(mock_cloud_upload.call_count, 0)
+
+        # Test B: LIVE EXECUTION
+        out_live = io.StringIO()
+        with patch("requests.get", return_value=mock_resp):
+            call_command("repair_accessory_normalization", stdout=out_live)
+        live_output = out_live.getvalue()
+        self.assertIn("Mode: LIVE EXECUTION", live_output)
+        self.assertIn("[REPAIRED]", live_output)
+        self.assertEqual(mock_cloud_upload.call_count, 1)
+
+        # Verify normalized image uploaded
+        acc_analysis.refresh_from_db()
+        uploaded_bytes = mock_cloud_upload.call_args[0][0]
+        if hasattr(uploaded_bytes, "seek"):
+            uploaded_bytes.seek(0)
+            data = uploaded_bytes.read()
+        else:
+            data = uploaded_bytes
+        img = Image.open(BytesIO(data))
+        self.assertEqual(img.size, (1024, 1024))
+        self.assertEqual(acc_item.image.name, "wardrobe_items/originals/acc_hist.png")
+        self.assertEqual(acc_item.user_id, self.user.id)
+
+        # Test C: IDEMPOTENT RERUN
+        # On second run, it fetches the normalized image bytes
+        mock_resp_normalized = MagicMock()
+        mock_resp_normalized.content = data
+        mock_resp_normalized.raise_for_status = MagicMock()
+
+        out_rerun = io.StringIO()
+        with patch("requests.get", return_value=mock_resp_normalized):
+            call_command("repair_accessory_normalization", stdout=out_rerun)
+        rerun_output = out_rerun.getvalue()
+        self.assertIn("[ALREADY NORMALIZED]", rerun_output)
+        # Upload count remains 1 (no new upload on rerun)
+        self.assertEqual(mock_cloud_upload.call_count, 1)
 
 
 
