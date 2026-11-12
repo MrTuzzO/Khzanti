@@ -1,3 +1,5 @@
+import io
+import logging
 from drf_spectacular.utils import OpenApiTypes, extend_schema_field
 from rest_framework import serializers
 
@@ -5,6 +7,48 @@ from core.validators import RestrictedImageField
 from wardrobe.models import Category
 from wardrobe.serializers import CategorySerializer
 from .models import ItemAnalysis, WardrobeItem
+
+logger = logging.getLogger(__name__)
+
+
+def apply_exif_orientation(image_file):
+    """
+    Inspects image EXIF data and applies ImageOps.exif_transpose() so mobile camera
+    photos are correctly oriented upright before saving and AI processing.
+    Preserves already-correct images and handles exceptions safely.
+    """
+    if not image_file:
+        return image_file
+    try:
+        from PIL import Image, ImageOps
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        img = Image.open(image_file)
+        exif = getattr(img, "getexif", None)
+        orientation = exif().get(0x0112) if (exif and callable(exif)) else None
+        if not orientation and hasattr(img, "_getexif") and callable(img._getexif):
+            raw_exif = img._getexif()
+            if raw_exif:
+                orientation = raw_exif.get(0x0112)
+
+        if orientation in (2, 3, 4, 5, 6, 7, 8):
+            transposed = ImageOps.exif_transpose(img)
+            if transposed is not None:
+                buf = io.BytesIO()
+                save_fmt = img.format or "JPEG"
+                transposed.save(buf, format=save_fmt)
+                buf.seek(0)
+                return SimpleUploadedFile(
+                    name=getattr(image_file, "name", "upload.jpg"),
+                    content=buf.getvalue(),
+                    content_type=getattr(image_file, "content_type", "image/jpeg"),
+                )
+    except Exception as exc:
+        logger.warning("EXIF orientation processing skipped for %s: %s", getattr(image_file, "name", "file"), exc)
+    finally:
+        if hasattr(image_file, "seek") and callable(image_file.seek):
+            image_file.seek(0)
+    return image_file
 
 
 class NullableScalarModelSerializerMixin:
@@ -43,6 +87,9 @@ class WardrobeItemCreateSerializer(NullableScalarModelSerializerMixin, serialize
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_image(self, value):
+        return apply_exif_orientation(value)
 
 
 
