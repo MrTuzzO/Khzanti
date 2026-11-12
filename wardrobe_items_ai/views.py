@@ -21,6 +21,7 @@ from .serializers import (
 from .services import (
     _friendly_error_message,
     _parse_json_response,
+    save_wardrobe_item_to_cloudinary,
     submit_bg_removal_job_async,
     submit_vision_job_async,
     sync_analysis_status,
@@ -392,14 +393,9 @@ class WardrobeItemSaveView(APIView):
             serializer = WardrobeItemSerializer(item, context={"request": request})
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        # Download from fal_cdn_url and save to Cloudinary
+        # Download from fal_cdn_url, normalize (if accessory), and save to Cloudinary
         try:
-            resp = requests.get(analysis.fal_cdn_url, timeout=30)
-            resp.raise_for_status()
-            filename = f"processed_item_{item.id}.png"
-            analysis.processed_image.save(filename, ContentFile(resp.content), save=False)
-            analysis.is_saved = True
-            analysis.save(update_fields=["processed_image", "is_saved", "updated_at"])
+            save_wardrobe_item_to_cloudinary(analysis)
         except Exception as exc:
             logger.error("Failed to save wardrobe item %s processed image to Cloudinary: %s", item.id, exc, exc_info=True)
             return Response(
