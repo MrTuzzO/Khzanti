@@ -58,6 +58,7 @@ class Avatar(models.Model):
         blank=True,
     )
     is_saved = models.BooleanField(default=False, db_index=True)
+    saved_at = models.DateTimeField(null=True, blank=True, db_index=True)
     error_message = models.TextField(blank=True)
     internal_error_detail = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
