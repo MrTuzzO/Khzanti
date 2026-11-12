@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import io
 import json
 import logging
 import re
@@ -7,6 +8,7 @@ import time
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db import transaction
 import fal_client
 from nacl.encoding import HexEncoder
 from nacl.exceptions import BadSignatureError
@@ -311,12 +313,97 @@ def sync_analysis_status(analysis: ItemAnalysis) -> ItemAnalysis:
     return analysis
 
 
+def normalize_accessory_image(
+    image_bytes: bytes,
+    category_name: str = "",
+    description: str = "",
+    target_canvas_size: int = 1024,
+) -> bytes:
+    """
+    Normalizes a transparent background-removed accessory PNG:
+    - Reads the alpha channel.
+    - Calculates the non-transparent bounding box via alpha channel.
+    - Crops excess transparent borders.
+    - Preserves aspect ratio and scales object to fit comfortably on target canvas with balanced padding.
+    - Centers the accessory onto a standardized transparent canvas (default 1024x1024).
+    - Preserves fine details (straps, chains, frames) using Lanczos resampling.
+    - Handles fully transparent, invalid, or non-RGBA images safely by returning original bytes.
+    """
+    if not image_bytes:
+        return image_bytes
+
+    try:
+        from PIL import Image
+
+        buf_in = io.BytesIO(image_bytes)
+        img = Image.open(buf_in)
+
+        # If the image does not have an alpha channel, we cannot do alpha cropping
+        if "A" not in img.getbands():
+            return image_bytes
+
+        # Extract alpha channel
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox()
+        if not bbox:
+            # Fully transparent or empty
+            return image_bytes
+
+        bbox_w = bbox[2] - bbox[0]
+        bbox_h = bbox[3] - bbox[1]
+        if bbox_w <= 0 or bbox_h <= 0:
+            return image_bytes
+
+        # Crop tightly to alpha bounding box
+        cropped = img.crop(bbox)
+        cw, ch = cropped.size
+
+        # Standard canvas size
+        canvas_dim = target_canvas_size
+        # Usable dimension: leave ~10% padding on each side (80% usable)
+        max_usable = int(canvas_dim * 0.80)
+
+        # Scale preserving exact aspect ratio
+        scale = min(max_usable / cw, max_usable / ch)
+
+        new_w = max(1, int(round(cw * scale)))
+        new_h = max(1, int(round(ch * scale)))
+
+        # High-quality Lanczos resampling to preserve delicate accessory details
+        resized = cropped.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # Create standardized transparent canvas
+        canvas = Image.new("RGBA", (canvas_dim, canvas_dim), (0, 0, 0, 0))
+
+        # Center on canvas
+        offset_x = (canvas_dim - new_w) // 2
+        offset_y = (canvas_dim - new_h) // 2
+
+        canvas.paste(resized, (offset_x, offset_y), mask=resized)
+
+        buf_out = io.BytesIO()
+        canvas.save(buf_out, format="PNG", optimize=True)
+        return buf_out.getvalue()
+    except Exception as exc:
+        logger.warning("normalize_accessory_image encountered an error: %s. Returning raw bytes.", exc)
+        return image_bytes
+
+
 def save_wardrobe_item_to_cloudinary(analysis: ItemAnalysis) -> ItemAnalysis:
     """
     Explicitly downloads the AI-processed background-removed image from fal.ai CDN URL and uploads it to Cloudinary storage.
-    Idempotent: if already saved, returns immediately without re-uploading.
+    For accessories, normalizes alpha bounding-box cropping, centering, and standardized canvas padding before saving.
+    Idempotent and concurrency-safe: re-checks the latest database state before downloading and before saving,
+    preventing simultaneous workers from uploading the same item multiple times.
     """
-    if analysis.is_saved:
+    # 1. Quick in-memory check
+    if analysis.is_saved and analysis.processed_image:
+        return analysis
+
+    # 2. Pre-download DB check: see if another worker already saved it
+    db_state = ItemAnalysis.objects.filter(pk=analysis.pk).values("is_saved", "processed_image").first()
+    if db_state and db_state["is_saved"] and db_state["processed_image"]:
+        analysis.refresh_from_db()
         return analysis
 
     url_to_download = analysis.fal_cdn_url or (analysis.processed_image.url if analysis.processed_image else "")
@@ -328,13 +415,54 @@ def save_wardrobe_item_to_cloudinary(analysis: ItemAnalysis) -> ItemAnalysis:
         )
 
     try:
+        # Download and normalize OUTSIDE any database transaction/lock
         img_resp = requests.get(url_to_download, timeout=30)
         img_resp.raise_for_status()
+        raw_bytes = img_resp.content
 
-        filename = f"processed_item_{analysis.wardrobe_item_id}.png"
-        analysis.processed_image.save(filename, ContentFile(img_resp.content), save=False)
-        analysis.is_saved = True
-        analysis.save(update_fields=["processed_image", "is_saved", "updated_at"])
+        wardrobe_item = getattr(analysis, "wardrobe_item", None)
+        category_name = getattr(wardrobe_item.category, "name", "") if (wardrobe_item and wardrobe_item.category) else ""
+        desc = getattr(analysis, "description", "") or ""
+
+        # Normalize accessories only
+        from outfits.services import classify_accessory_subtype
+        if classify_accessory_subtype(category_name, desc) is not None:
+            try:
+                normalized_bytes = normalize_accessory_image(raw_bytes, category_name, desc)
+                final_bytes = normalized_bytes
+            except Exception as norm_exc:
+                logger.error(
+                    "Accessory normalization failed for WardrobeItem %s (analysis %s): %s. Falling back to raw BiRefNet image.",
+                    getattr(wardrobe_item, "id", None),
+                    analysis.id,
+                    norm_exc,
+                    exc_info=True,
+                )
+                final_bytes = raw_bytes
+        else:
+            final_bytes = raw_bytes
+
+        # 3. Post-download / pre-upload check: re-check DB state before uploading to Cloudinary
+        db_state_after_dl = ItemAnalysis.objects.filter(pk=analysis.pk).values("is_saved", "processed_image").first()
+        if db_state_after_dl and db_state_after_dl["is_saved"] and db_state_after_dl["processed_image"]:
+            analysis.refresh_from_db()
+            return analysis
+
+        # 4. Atomic row lock for upload and database commit
+        with transaction.atomic():
+            locked = ItemAnalysis.objects.select_for_update().filter(pk=analysis.pk).first()
+            if not locked:
+                return analysis
+            if locked.is_saved and locked.processed_image:
+                analysis.refresh_from_db()
+                return analysis
+
+            filename = f"processed_item_{locked.wardrobe_item_id}.png"
+            locked.processed_image.save(filename, ContentFile(final_bytes), save=False)
+            locked.is_saved = True
+            locked.save(update_fields=["processed_image", "is_saved", "updated_at"])
+
+        analysis.refresh_from_db()
     except Exception as exc:
         from core.exceptions import ServiceError
         if isinstance(exc, ServiceError):
