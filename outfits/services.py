@@ -628,12 +628,14 @@ def resolve_tryon_avatar(user, requested_style=None):
 
 def get_latest_saved_custom_avatar(user):
     """
-    Returns the user's most recently generated custom avatar that has been
+    Returns the user's most recently saved custom avatar that has been
     successfully saved to Cloudinary (is_default=False, status=DONE, is_saved=True, non-empty result_image).
+    Uses saved_at (falling back to created_at if saved_at is null) to determine recency.
     Returns None if no such custom avatar exists.
     """
     if not user or not getattr(user, "is_authenticated", False):
         return None
+    from django.db.models.functions import Coalesce
     return (
         Avatar.objects.filter(
             user=user,
@@ -643,7 +645,8 @@ def get_latest_saved_custom_avatar(user):
         )
         .exclude(result_image="")
         .exclude(result_image__isnull=True)
-        .order_by("-created_at", "-id")
+        .annotate(effective_saved_at=Coalesce("saved_at", "created_at"))
+        .order_by("-effective_saved_at", "-id")
         .first()
     )
 
@@ -1142,17 +1145,19 @@ def apply_auto_replacement_to_today_job(replacement_job: OutfitJob) -> OutfitJob
                 replacement_job.delete()
                 return current_job
 
-            # If current_job already uses an avatar with a newer created_at timestamp, drop older replacement
+            # Stale webhook protection: If current_job already has a custom avatar saved more recently, drop older replacement
+            current_effective_saved_at = getattr(current_job.avatar, "saved_at", None) or getattr(current_job.avatar, "created_at", None)
+            rep_effective_saved_at = getattr(replacement_job.avatar, "saved_at", None) or getattr(replacement_job.avatar, "created_at", None)
             if (
                 current_job.avatar
-                and current_job.avatar.created_at
-                and replacement_job.avatar
-                and replacement_job.avatar.created_at
-                and current_job.avatar.created_at > replacement_job.avatar.created_at
+                and not current_job.avatar.is_default
+                and current_effective_saved_at
+                and rep_effective_saved_at
+                and current_effective_saved_at > rep_effective_saved_at
             ):
                 logger.info(
-                    "[AUTO OUTFIT REPLACEMENT] Stale replacement job %s (replacement avatar created_at %s < current avatar created_at %s). Dropping.",
-                    replacement_job.id, replacement_job.avatar.created_at, current_job.avatar.created_at,
+                    "[AUTO OUTFIT REPLACEMENT] Stale replacement job %s (replacement saved_at %s < current avatar saved_at %s). Dropping.",
+                    replacement_job.id, rep_effective_saved_at, current_effective_saved_at,
                 )
                 replacement_job.delete()
                 return current_job
