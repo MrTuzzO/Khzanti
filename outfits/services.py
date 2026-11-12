@@ -17,13 +17,216 @@ logger = logging.getLogger(__name__)
 FAL_TRY_ON_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 
+def classify_accessory_subtype(category_name: str, description: str = "") -> str | None:
+    """
+    Identifies whether an item is an accessory, and if so, returns its specific accessory subtype.
+    Returns one of:
+      'eyewear', 'backpack', 'crossbody', 'bag', 'watch_bracelet',
+      'necklace', 'earring', 'belt', 'headwear', 'scarf', 'generic_accessory',
+      or None (if the item is a standard garment like top, bottom, dress, outerwear, hijab, footwear).
+    """
+    cat_lower = (category_name or "").strip().lower()
+    desc_lower = (description or "").strip().lower()
+
+    # Rule 1: Explicitly preserve normal clothing categories as garments
+    # Tops, Bottoms, Dresses, Outerwear, Hijabs, Footwear
+    garment_cat_keywords = [
+        "top", "tops", "shirt", "shirts", "t-shirt", "t-shirts", "tee", "tees",
+        "blouse", "blouses", "sweater", "sweaters", "hoodie", "hoodies", "pullover",
+        "tank", "polo", "turtleneck", "camisole", "tunic", "kurta",
+        "bottom", "bottoms", "pant", "pants", "trouser", "trousers", "jean", "jeans",
+        "short", "shorts", "skirt", "skirts", "legging", "leggings", "sweatpant", "slacks", "chinos",
+        "dress", "dresses", "jumpsuit", "jumpsuits", "romper", "rompers", "borkha", "burqa",
+        "abaya", "abayas", "gown", "gowns", "frock", "frocks", "saree", "sari", "sarees",
+        "kaftan", "lehenga", "overalls", "dungaree", "thobe", "kandura",
+        "outerwear", "jacket", "jackets", "coat", "coats", "blazer", "blazers",
+        "cardigan", "cardigans", "vest", "vests", "parka", "windbreaker", "overcoat",
+        "shoe", "shoes", "footwear", "sneaker", "sneakers", "boot", "boots",
+        "heel", "heels", "sandal", "sandals", "flat", "flats", "loafer", "loafers", "slipper",
+        "hijab", "hijabs",
+    ]
+
+    words_cat = re.findall(r"\w+", cat_lower)
+    is_garment_category = any(w in garment_cat_keywords for w in words_cat) or any(
+        kw in cat_lower for kw in garment_cat_keywords
+    )
+
+    # Hijab in category or description is always a garment
+    if "hijab" in cat_lower or "hijab" in desc_lower:
+        return None
+
+    # If the category itself is a clear garment category, treat as garment
+    if is_garment_category and not any(
+        ak in cat_lower for ak in ["accessory", "accessories", "bag", "belt", "watch", "jewelry", "eyewear", "glasses", "hat"]
+    ):
+        return None
+
+    combined_text = f"{cat_lower} {desc_lower}".strip()
+
+    def has_any(keywords):
+        return any(re.search(r"\b" + re.escape(kw) + r"\b", combined_text) for kw in keywords)
+
+    # 1. Eyewear
+    eyewear_kw = ["glasses", "sunglasses", "spectacles", "eyewear", "shades", "frames", "sun glass", "sun glasses"]
+    if has_any(eyewear_kw):
+        return "eyewear"
+
+    # 2. Bags
+    backpack_kw = ["backpack", "backpacks", "knapsack", "bookbag", "rucksack"]
+    if has_any(backpack_kw):
+        return "backpack"
+
+    crossbody_kw = ["crossbody", "cross-body", "sling bag", "messenger bag", "cross body"]
+    if has_any(crossbody_kw):
+        return "crossbody"
+
+    bag_kw = [
+        "bag", "bags", "handbag", "handbags", "tote", "totes", "purse", "purses",
+        "clutch", "satchel", "duffle", "duffel", "pouch", "wristlet", "shoulder bag"
+    ]
+    if has_any(bag_kw):
+        return "bag"
+
+    # 3. Watches & Bracelets
+    watch_kw = ["watch", "watches", "wristwatch", "smartwatch", "timepiece", "bracelet", "bracelets", "bangle", "bangles", "wristband"]
+    if has_any(watch_kw):
+        return "watch_bracelet"
+
+    # 4. Necklaces
+    necklace_kw = ["necklace", "necklaces", "pendant", "pendants", "choker", "chokers", "locket", "chain necklace"]
+    if has_any(necklace_kw):
+        return "necklace"
+
+    # 5. Earrings
+    earring_kw = ["earring", "earrings", "ear stud", "ear studs", "ear drop", "ear drops", "hoops", "ear cuffs"]
+    if has_any(earring_kw):
+        return "earring"
+
+    # 6. Belts
+    belt_kw = ["belt", "belts", "waistband", "cummerbund", "sash"]
+    if has_any(belt_kw):
+        return "belt"
+
+    # 7. Hats & Caps
+    headwear_kw = [
+        "hat", "hats", "cap", "caps", "beanie", "beanies", "beret", "berets",
+        "fedora", "fedoras", "visor", "visors", "headband", "headbands", "turban", "headwear", "baseball cap"
+    ]
+    if has_any(headwear_kw):
+        return "headwear"
+
+    # 8. Scarves
+    scarf_kw = ["scarf", "scarves", "shawl", "shawls", "muffler", "mufflers", "neckerchief", "stole", "ascot", "bandana", "bandanas"]
+    if has_any(scarf_kw):
+        return "scarf"
+
+    # 9. Other specific jewelry
+    jewelry_kw = ["jewelry", "jewellery", "ring", "rings", "brooch", "brooches", "cufflink", "cufflinks", "tie pin"]
+    if has_any(jewelry_kw):
+        return "generic_accessory"
+
+    # 10. Generic Accessories category check
+    if any(re.search(r"\b" + re.escape(ak) + r"\b", cat_lower) for ak in ["accessory", "accessories"]):
+        return "generic_accessory"
+
+    return None
+
+
+def build_accessory_prompt_instruction(item, idx: int, category_name: str, details_str: str) -> str | None:
+    """
+    Builds category-specific virtual try-on placement instructions for an accessory item.
+    Returns None if the item is not an accessory (i.e. standard clothing/garment).
+    """
+    analysis = getattr(item, "analysis", None)
+    desc = getattr(analysis, "description", "") if analysis else ""
+    subtype = classify_accessory_subtype(category_name, desc)
+    if not subtype:
+        return None
+
+    prefix = f"   - Image {idx}: Reference {category_name}{details_str}. "
+
+    if subtype == "eyewear":
+        return (
+            f"{prefix}This is an eyewear accessory. Naturally position it worn on the avatar's face over the eyes, "
+            f"aligning the frames realistically with the bridge of the nose, temples, and ears. "
+            f"Preserve the avatar's facial identity, facial structure, skin appearance, and expression, "
+            f"allowing only the natural visual placement of the eyewear over the eyes. "
+            f"Maintain realistic facial fit and proportions relative to the head; do not enlarge, distort, or float."
+        )
+    elif subtype == "backpack":
+        return (
+            f"{prefix}This is a backpack accessory. Naturally position it resting on the avatar's back and shoulders "
+            f"with realistic strap placement contouring over the shoulders. "
+            f"Preserve the authentic bag design, materials, and strap structure; "
+            f"maintain realistic carrying proportions relative to the human body and do not place randomly or fuse into clothing."
+        )
+    elif subtype == "crossbody":
+        return (
+            f"{prefix}This is a crossbody bag accessory. Position the bag resting naturally at the hip or side "
+            f"with the strap extending diagonally across the torso in a realistic resting position. "
+            f"Preserve the authentic bag design, strap structure, and hardware; "
+            f"maintain natural real-world dimensions relative to the human body without distortion or random placement."
+        )
+    elif subtype == "bag":
+        return (
+            f"{prefix}This is a bag accessory. Position it held naturally in the avatar's hand or worn draped over the "
+            f"shoulder or arm in a realistic resting posture. "
+            f"Preserve the authentic bag silhouette, handle and strap structure, material texture, and hardware. "
+            f"Maintain realistic carrying dimensions relative to the human body; do not place randomly on the body or fuse into clothing."
+        )
+    elif subtype == "watch_bracelet":
+        return (
+            f"{prefix}This is a wrist accessory. Naturally position it worn around the avatar's wrist. "
+            f"Maintain realistic human wrist proportions and life-sized scale (a watch or bracelet must remain wrist-sized, not enlarged). "
+            f"Preserve authentic band, clasp, dial, and hardware design details without floating off the arm."
+        )
+    elif subtype == "necklace":
+        return (
+            f"{prefix}This is a necklace accessory. Position it naturally draped around the neck and collarbone, "
+            f"respecting the clothing neckline and fabric layering. "
+            f"Maintain delicate, life-sized proportions relative to the human body without enlargement; "
+            f"preserve authentic chain, pendant, and gemstone design details."
+        )
+    elif subtype == "earring":
+        return (
+            f"{prefix}This is an earring accessory. Position it naturally attached to the avatar's ears, "
+            f"aligning realistically with the earlobes and hair. "
+            f"Preserve the original design, delicate detail, and realistic life-sized scale; "
+            f"do not enlarge, distort, or misplace."
+        )
+    elif subtype == "belt":
+        return (
+            f"{prefix}This is a belt accessory. Position it fastened naturally around the waist or waistband, "
+            f"integrating seamlessly with the selected clothing. "
+            f"Maintain realistic belt width, buckle placement, and snug contouring around the waist."
+        )
+    elif subtype == "headwear":
+        return (
+            f"{prefix}This is headwear. Position it naturally on top of the avatar's head, "
+            f"respecting the avatar's head shape, hair, and proportions. "
+            f"Preserve authentic crown, brim, and construction details without distortion."
+        )
+    elif subtype == "scarf":
+        return (
+            f"{prefix}This is a scarf accessory. Position it naturally draped around the neck, shoulders, or head "
+            f"according to the item type, integrating smoothly with the clothing layers. "
+            f"Preserve authentic fabric texture, drape, and pattern."
+        )
+    else:  # generic_accessory
+        return (
+            f"{prefix}This is an accessory item. Position it naturally in its appropriate anatomical or carrying location "
+            f"on the avatar, maintaining realistic life-sized proportions relative to the human body. "
+            f"Preserve authentic design details, hardware, and materials; do not enlarge, float, or place randomly."
+        )
+
+
 def build_try_on_prompt(avatar: Avatar, items: list) -> str:
     """
     Constructs an instruction-rich prompt for fal-ai/nano-banana-pro/edit.
     Enforces a strict division of responsibilities:
       - Image 1 (Avatar) = Authoritative Final-Image World (controls person, pose, lighting, camera, environment, style).
-      - Wardrobe Images = Authoritative Garment References (determines WHAT garment is worn: category, cut, color, pattern, construction).
-    Directs the model to reconstruct the garments naturally on the avatar rather than compositing or pasting pixels.
+      - Wardrobe Images = Authoritative Garment & Accessory References (determines WHAT is worn: category, cut/details, color, pattern, construction).
+    Directs the model to reconstruct garments and position accessories naturally on the avatar rather than compositing or pasting pixels.
     """
     is_realistic = (avatar.style == Avatar.Style.REALISTIC)
     avatar_style_desc = "photorealistic human photograph" if is_realistic else "cartoon / stylized / illustrated artwork"
@@ -53,6 +256,7 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         "- The avatar in Image 1 is the AUTHORITATIVE BASE SCENE that dictates the entire visual world of the final output.",
         "- Avatar controls: person identity, face, facial structure, expression, apparent gender, skin appearance, hair, body proportions, anatomy, pose, camera position, camera angle, framing, perspective, environment, background, lighting, exposure, image quality, and overall rendering style.",
         "- STRICT PRESERVATION: Do NOT repaint, restyle, regenerate, beautify, or alter the avatar. Adapt the clothing to the person — NEVER alter the person to fit the clothing.",
+        "- ACCESSORY & EYEWEAR POSITIONING ON AVATAR: When eyewear (glasses/sunglasses), headwear, or facial/body accessories are worn, allow the natural visual placement of the accessory on the avatar (e.g. glasses naturally resting over the eyes and nose bridge) without prohibiting or rejecting placement, while strictly preserving underlying facial identity, facial structure, expression, skin, and hair.",
         "",
         "2. WARDROBE IMAGES ARE AUTHORITATIVE GARMENT REFERENCES (WHAT TO WEAR, NOT HOW TO RENDER):",
         "- The wardrobe images (Image 2, 3, etc.) control ONLY the garment's identity and design specifications:",
@@ -73,10 +277,15 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         if desc:
             details.append(f"description: {desc}")
         details_str = f" ({', '.join(details)})" if details else ""
-        prompt_parts.append(
-            f"   - Image {idx}: Reference {category_name}{details_str}. "
-            f"Extract and faithfully reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)."
-        )
+
+        accessory_instruction = build_accessory_prompt_instruction(item, idx, category_name, details_str)
+        if accessory_instruction:
+            prompt_parts.append(accessory_instruction)
+        else:
+            prompt_parts.append(
+                f"   - Image {idx}: Reference {category_name}{details_str}. "
+                f"Extract and faithfully reconstruct this garment's design identity (type, cut, silhouette, collar, sleeves, seams, color, pattern, and details)."
+            )
 
     prompt_parts.extend([
         "",
@@ -85,6 +294,7 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         "- The clothing must naturally conform to the avatar's 3D anatomy: shoulders, chest, torso, waist, hips, arms, legs, body curvature, and pose.",
         "- Obey realistic physical fabric behavior: natural draping, fabric tension, compression folds, gravity, seams, contact shadows, ambient occlusion, and soft edge blending.",
         "- MULTI-GARMENT PHYSICAL LAYERING: When multiple items are worn, maintain proper physical layering (e.g., shirts tucked into/under pants or jackets, dresses under coats, hijabs draped around head/neck contouring over shoulders and collar, shoes attached naturally to feet).",
+        "- ACCESSORIES & REALISTIC SCALE: All accessories (bags, glasses, watches, jewelry, belts, hats, scarves) must maintain realistic, life-sized proportions relative to the human body. A watch must remain wrist-sized, glasses must fit the face, a handbag must have realistic dimensions, and jewelry must not be enlarged. Position accessories in their natural anatomical or carrying locations; do not float, distort, or place them randomly.",
         "- NEVER treat the wardrobe image as a texture, cutout, sticker, pasted layer, or pixel source.",
         "",
         style_specific_instructions,
@@ -132,7 +342,21 @@ async def submit_try_on_job_async(job: OutfitJob) -> OutfitJob:
 
     for item in items:
         analysis = getattr(item, "analysis", None)
-        item_url = analysis.display_url if analysis else ""
+        if not analysis:
+            continue
+        # Ensure accessories are normalized and saved to storage before try-on submission
+        if not analysis.is_saved and analysis.fal_cdn_url:
+            cat_name = getattr(item.category, "name", "") if item.category else ""
+            desc = getattr(analysis, "description", "") or ""
+            if classify_accessory_subtype(cat_name, desc) is not None:
+                try:
+                    from wardrobe_items_ai.services import save_wardrobe_item_to_cloudinary
+                    await sync_to_async(save_wardrobe_item_to_cloudinary)(analysis)
+                    await sync_to_async(analysis.refresh_from_db)()
+                except Exception as save_err:
+                    logger.warning("Accessory normalization before try-on failed for item %s: %s", item.id, save_err)
+
+        item_url = analysis.display_url
         if item_url:
             image_urls.append(item_url)
 
