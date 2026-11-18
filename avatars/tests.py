@@ -7,7 +7,12 @@ from rest_framework.test import APITestCase
 
 from avatars.adapters import get_profile_constraints
 from avatars.models import Avatar
-from avatars.services import build_avatar_prompt, submit_avatar_job
+from avatars.services import (
+    CARTOON_STYLE_REFERENCE_URLS,
+    build_avatar_prompt,
+    get_cartoon_style_reference_url,
+    submit_avatar_job,
+)
 
 User = get_user_model()
 
@@ -216,6 +221,89 @@ class AvatarPromptAndPipelineTestCase(APITestCase):
         self.assertIn("clean silhouettes, smooth stylized shading", prompt)
         self.assertIn("Both feet completely visible", prompt)
         self.assertIn("STANDARDIZED UPRIGHT POSE", prompt)
+
+        # Semi-realistic 3D CGI characteristics
+        self.assertIn("SEMI-REALISTIC 3D CGI CHARACTER ART", prompt)
+        self.assertIn("soft CGI animation aesthetic", prompt)
+        self.assertIn("Semi-realistic human proportions and anatomy", prompt)
+        self.assertIn("Maintain natural eye size, natural nose, mouth, jawline", prompt)
+        self.assertIn("Smooth skin shading with subtle texture, realistic lighting", prompt)
+        self.assertIn("Detailed hair and facial hair", prompt)
+        self.assertIn("realistic clothing textures, detailed stitching, realistic folds", prompt)
+        self.assertIn("Soft studio lighting and natural shadows", prompt)
+
+        # Strict negative constraints
+        self.assertIn("NO exaggerated cartoon proportions", prompt)
+        self.assertIn("NO oversized cartoon eyes", prompt)
+        self.assertIn("NO childlike, chibi, toy-like, doll-like", prompt)
+        self.assertIn("NO plastic-looking skin", prompt)
+        self.assertIn("NO flat 2D illustration", prompt)
+        self.assertIn("NO heavy outlines", prompt)
+
+    def test_cartoon_avatar_pipeline_submits_dual_image_with_canonical_style_reference(self, mock_cloud):
+        """Verifies CARTOON avatar submissions pass both selfie and canonical style reference."""
+        user_female = User.objects.create_user(
+            email="female_cartoon@example.com",
+            name="Female Cartoon User",
+            password="password123",
+        )
+        avatar_female = Avatar.objects.create(
+            user=user_female,
+            gender="female",
+            source_photo=self.dummy_image,
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.PENDING,
+        )
+
+        mock_handle = MagicMock()
+        mock_handle.request_id = "mock_female_req"
+
+        with patch("fal_client.submit", return_value=mock_handle) as mock_submit:
+            submit_avatar_job(avatar_female)
+            args = mock_submit.call_args.kwargs.get("arguments", {})
+            image_urls = args.get("image_urls", [])
+
+            self.assertEqual(len(image_urls), 2)
+            self.assertEqual(image_urls[1], CARTOON_STYLE_REFERENCE_URLS["female"])
+
+            prompt = args.get("prompt", "")
+            self.assertIn("MULTI-IMAGE DIVISION OF ROLES", prompt)
+            self.assertIn("Image 1 (Subject Reference)", prompt)
+            self.assertIn("Image 2 (Style Reference)", prompt)
+            self.assertIn("soft CGI animation aesthetic", prompt)
+
+        # Verify male user selects male canonical reference
+        user_male = User.objects.create_user(
+            email="male_cartoon@example.com",
+            name="Male Cartoon User",
+            password="password123",
+        )
+        avatar_male = Avatar.objects.create(
+            user=user_male,
+            gender="male",
+            source_photo=self.dummy_image,
+            style=Avatar.Style.CARTOON,
+            status=Avatar.JobStatus.PENDING,
+        )
+
+        mock_handle_m = MagicMock()
+        mock_handle_m.request_id = "mock_male_req"
+
+        with patch("fal_client.submit", return_value=mock_handle_m) as mock_submit_m:
+            submit_avatar_job(avatar_male)
+            args_m = mock_submit_m.call_args.kwargs.get("arguments", {})
+            image_urls_m = args_m.get("image_urls", [])
+
+            self.assertEqual(len(image_urls_m), 2)
+            self.assertEqual(image_urls_m[1], CARTOON_STYLE_REFERENCE_URLS["male"])
+
+    def test_get_cartoon_style_reference_url_helper(self, mock_cloud):
+        """Verifies resolution of canonical style references for different gender inputs."""
+        self.assertEqual(get_cartoon_style_reference_url("male"), CARTOON_STYLE_REFERENCE_URLS["male"])
+        self.assertEqual(get_cartoon_style_reference_url("man"), CARTOON_STYLE_REFERENCE_URLS["male"])
+        self.assertEqual(get_cartoon_style_reference_url("female"), CARTOON_STYLE_REFERENCE_URLS["female"])
+        self.assertEqual(get_cartoon_style_reference_url("woman"), CARTOON_STYLE_REFERENCE_URLS["female"])
+        self.assertEqual(get_cartoon_style_reference_url(""), CARTOON_STYLE_REFERENCE_URLS["male"])
 
     def test_cartoon_avatar_pipeline_submits_9_16_aspect_ratio_and_full_body_prompt(self, mock_cloud):
         user = User.objects.create_user(

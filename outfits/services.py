@@ -243,7 +243,8 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
     else:
         style_specific_instructions = (
             "4. STYLE EXECUTION — CARTOON / ILLUSTRATED / STYLIZED RENDERING:\n"
-            "- Reconstruct all garments in the EXACT SAME visual language and artistic medium as the avatar in Image 1.\n"
+            "- Reconstruct all garments in the EXACT SAME visual language, soft 3D CGI animation aesthetic, and artistic medium as the avatar in Image 1.\n"
+            "- Render stylized 3D digital fabric with natural folds, clean seams, and soft studio lighting matching the avatar's 3D character world.\n"
             "- Match the avatar's rendering technique, line quality, outline thickness, flat/cel/gradient shading, highlights, color palette treatment, texture abstraction, and level of artistic detail.\n"
             "- Any photorealistic wardrobe reference photo must be completely stylized and redrawn to match the avatar's illustrated world.\n"
             "- NEVER place a photorealistic garment or real photographic texture onto a cartoon avatar."

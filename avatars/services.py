@@ -17,6 +17,35 @@ DEFAULT_SYSTEM_AVATAR_IMAGE_PATHS = {
     ("female", Avatar.Style.CARTOON): "media/avatars/result/system_default_female_cartoon_uh7xk3",
 }
 
+CARTOON_STYLE_REFERENCE_URLS = {
+    "male": "https://res.cloudinary.com/c9hf1kpt/image/upload/v1/media/avatars/result/system_default_male_cartoon_ecftdo",
+    "female": "https://res.cloudinary.com/c9hf1kpt/image/upload/v1/media/avatars/result/system_default_female_cartoon_uh7xk3",
+}
+
+
+def get_cartoon_style_reference_url(gender_raw: str = "") -> str:
+    """
+    Returns the canonical style reference image URL for cartoon avatar generation.
+    Anchors generation to the soft 3D CGI animation aesthetic of the system default avatars.
+    """
+    gender = str(gender_raw or "").strip().lower()
+    target_gender = "female" if gender in ("female", "woman", "girl", "f") else "male"
+
+    try:
+        sys_default = Avatar.objects.filter(
+            is_default=True,
+            gender=target_gender,
+            style=Avatar.Style.CARTOON,
+        ).first()
+        if sys_default and sys_default.display_result_image:
+            url = sys_default.display_result_image
+            if url.startswith("http://") or url.startswith("https://"):
+                return url
+    except Exception:
+        pass
+
+    return CARTOON_STYLE_REFERENCE_URLS.get(target_gender, CARTOON_STYLE_REFERENCE_URLS["male"])
+
 
 def resolve_user_default_avatar(user, requested_style=None):
     """
@@ -91,23 +120,43 @@ AVATAR_STYLE_PROMPTS = {
         "- Render in high-fidelity 3D digital human character aesthetic (such as modern cinematic 3D character engine rendering) with clean digital subsurface scattering and studio lighting. Target: authentic human likeness + polished realistic 3D digital-avatar rendering."
     ),
     Avatar.Style.CARTOON: (
-        "4. VISUAL STYLE & QUALITY STANDARD (Polished 3D Cartoon / Stylized Character Avatar):\n"
+        "4. VISUAL STYLE & QUALITY STANDARD (Polished 3D Cartoon / Stylized Character Avatar — Soft CGI Animation Aesthetic):\n"
         "- Render as a full-body polished 3D cartoon / stylized digital character avatar, completely visible from the top of the head down to both feet.\n"
         "- MANDATORY FULL-BODY FRAMING: The entire stylized character MUST be visible head-to-toe in a standardized upright, front-facing standing pose, perfectly centered within the 9:16 canvas with generous margins above the head and below the feet.\n"
         "- STRICTLY PROHIBITED: Bust shots, chest-up illustrations, waist-up framing, half-body crops, or cropped character compositions are strictly forbidden. Do NOT crop at the knees, ankles, or feet.\n"
+        "- TARGET AESTHETIC — SEMI-REALISTIC 3D CGI CHARACTER ART: Render in a premium semi-realistic stylized 3D cartoon character art style with a soft CGI animation aesthetic (polished modern cinematic feature-animation aesthetic). The character must look like a high-end 3D animated character with clean, high-quality 3D character rendering.\n"
+        "- PROPORTIONS & ANATOMY: Semi-realistic human proportions and anatomy (~1:7 head-to-body ratio, natural shoulder width, realistic limbs, balanced torso and legs). The character must have believable, adult human anatomy conforming to the subject's profile, NOT exaggerated or deformed proportions.\n"
+        "- FACIAL FEATURES & LIKENESS: Slightly stylized facial features while preserving the subject's distinct identity, facial structure, and likeness. Maintain natural eye size, natural nose, mouth, jawline, and adult facial proportions. Expressive 3D cartoon facial features with warm, engaging expression, but strictly avoid giant or anime-scale eyes.\n"
+        "- SHADING & SKIN: Smooth skin shading with subtle texture, realistic lighting, soft subsurface scattering, and gentle ambient occlusion. Skin must look organic, soft, and alive with depth—NEVER flat, plastic, rubbery, or like a toy figurine.\n"
+        "- HAIR & GROOMING: Detailed hair and facial hair with clean definition, fine sculpted strand detail, and accurate representation of the subject's hairstyle, hair texture, color, and any facial hair (beards/mustaches accurately rendered in the 3D aesthetic).\n"
+        "- CLOTHING & FABRICS: Physically conforming 3D stylized clothing with natural fabric drape, realistic clothing textures, detailed stitching, realistic folds, and materials (denim, cotton, wool, silk, leather rendered with accurate tactile feel in the 3D medium).\n"
+        "- LIGHTING & ENVIRONMENT: Soft studio lighting and natural shadows. 3-point soft studio portrait lighting, gentle rim lighting to separate character from background, and natural soft contact shadows on a plain, neutral light-gray background.\n"
         "- Visual execution: Consistent artistic visual language with clean silhouettes, smooth stylized shading, cohesive lighting, charming stylized proportions, expressive 3D cartoon facial features, stylized hair, and physically conforming 3D stylized clothing with natural fabric drape.\n"
-        "- Coherent stylized artwork: Must look intentionally rendered as ONE complete illustrated 3D character piece, with no photorealistic or mismatched textures."
+        "- Coherent stylized artwork: Must look intentionally rendered as ONE complete illustrated 3D character piece, with no photorealistic or mismatched textures.\n"
+        "- STRICT NEGATIVE CONSTRAINTS (AVOID):\n"
+        "  * NO exaggerated cartoon proportions, bobblehead bodies, or giant oversized heads.\n"
+        "  * NO oversized cartoon eyes, giant anime eyes, or disproportionately large facial features.\n"
+        "  * NO childlike, chibi, toy-like, doll-like, or figurine appearance.\n"
+        "  * NO plastic-looking skin, glossy rubber, porcelain finish, or extreme facial simplification.\n"
+        "  * NO flat 2D illustration, comic-book art, comic, sketch, or anime styles.\n"
+        "  * NO heavy outlines, black border lines, or cel shading."
     ),
 }
 
 FAL_MODEL_ID = "fal-ai/nano-banana-pro/edit"
 
 
-def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
+def build_avatar_prompt(
+    style: str,
+    profile_constraints: dict = None,
+    has_style_reference: bool = False,
+) -> str:
     """
     Constructs a structured fal.ai prompt that treats Image 1 as a reference to
     extract identity and clothing from, rather than a composition/crop to copy.
     Always generates a complete, standardized full-body avatar (head-to-toe).
+    When has_style_reference is True, conditions the generation on Image 2 as the
+    authoritative visual style reference.
     """
     profile_constraints = profile_constraints or {}
     gender_raw = str(profile_constraints.get("gender") or "").strip().lower()
@@ -120,6 +169,13 @@ def build_avatar_prompt(style: str, profile_constraints: dict = None) -> str:
         "- Do NOT reproduce the original image's camera framing, crop, background, photographic artifacts, or raw photo appearance.",
         "- Extract and faithfully preserve the person's recognizable features: facial structure, face shape, eyes, nose, mouth, jawline, skin tone, hair color, hair texture, hairstyle, approximate age, and likeness in the newly synthesized avatar.",
     ]
+
+    if has_style_reference:
+        identity_lines.extend([
+            "- MULTI-IMAGE DIVISION OF ROLES:",
+            "  * Image 1 (Subject Reference): Extract and faithfully preserve the person's recognizable features (face shape, eyes, nose, mouth, skin tone, hair, facial hair, age) and exact clothing from Image 1.",
+            "  * Image 2 (Style Reference): Authoritative visual style reference. Replicate the EXACT 3D character art style, semi-realistic human proportions, soft CGI animation aesthetic, polished digital rendering, and studio lighting from Image 2.",
+        ])
 
     # Gender handling: explicit user profile constraint if provided, else visual inference from person
     if gender_raw in ("male", "man", "boy", "m"):
@@ -219,6 +275,8 @@ def submit_avatar_job(avatar: Avatar) -> None:
     Submits an avatar generation job to fal.ai.
     Saves the request ID and updates status to 'processing'.
     On submission failure, updates status to 'failed' with friendly error details.
+    For CARTOON style, includes the canonical 3D CGI cartoon style reference image
+    to ensure aesthetic consistency and prevent stylized drift.
     """
     try:
         try:
@@ -226,13 +284,28 @@ def submit_avatar_job(avatar: Avatar) -> None:
         except Exception:
             selfie_url = f"http://testserver/{avatar.source_photo.name}" if avatar.source_photo else ""
         profile_constraints = get_profile_constraints(avatar.user)
-        prompt = build_avatar_prompt(avatar.style, profile_constraints)
+
+        image_urls = [selfie_url]
+        has_style_ref = False
+
+        if avatar.style == Avatar.Style.CARTOON:
+            user_gender = avatar.gender or profile_constraints.get("gender") or ""
+            style_ref_url = get_cartoon_style_reference_url(user_gender)
+            if style_ref_url:
+                image_urls.append(style_ref_url)
+                has_style_ref = True
+
+        prompt = build_avatar_prompt(
+            avatar.style,
+            profile_constraints,
+            has_style_reference=has_style_ref,
+        )
 
         handle = fal_client.submit(
             FAL_MODEL_ID,
             arguments={
                 "prompt": prompt,
-                "image_urls": [selfie_url],
+                "image_urls": image_urls,
                 "aspect_ratio": "9:16",
                 "resolution": "1K",
                 "output_format": "png",
