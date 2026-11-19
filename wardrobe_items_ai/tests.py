@@ -783,6 +783,128 @@ class AccessoryImageNormalizationTestCase(APITestCase):
         self.assertEqual(mock_cloud_upload.call_count, 1)
 
 
+@patch("cloudinary.uploader.upload", return_value={"public_id": "test_public_id", "url": "https://res.cloudinary.com/test/image/upload/v1/test.png"})
+class WardrobeUrlAliasAndNPlusOneTests(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="testuser12", name="Sahar Test", email="sahar_test@example.com", password="password123"
+        )
+        self.other_user = User.objects.create_user(
+            username="otheruser99", name="Other Test", email="other_test@example.com", password="password123"
+        )
+        self.cat_tops = Category.objects.create(name="Tops")
+        self.cat_bags = Category.objects.create(name="Bag")
+
+        # Create 5 items for user: 2 saved, 3 unsaved
+        self.items = []
+        for i in range(5):
+            cat = self.cat_tops if i % 2 == 0 else self.cat_bags
+            item = WardrobeItem.objects.create(
+                user=self.user,
+                category=cat,
+                image=f"wardrobe_items/originals/item_{i}.png",
+            )
+            is_saved = (i < 2)
+            ItemAnalysis.objects.create(
+                wardrobe_item=item,
+                status=ItemAnalysis.JobStatus.DONE,
+                is_saved=is_saved,
+                processed_image=f"wardrobe_items_ai/processed/proc_{i}.png" if is_saved else None,
+                fal_cdn_url=f"https://v3b.fal.media/files/item_{i}.png",
+            )
+            self.items.append(item)
+
+        # Create 1 item for other user
+        other_item = WardrobeItem.objects.create(
+            user=self.other_user,
+            category=self.cat_tops,
+            image="wardrobe_items/originals/other.png",
+        )
+        ItemAnalysis.objects.create(
+            wardrobe_item=other_item,
+            status=ItemAnalysis.JobStatus.DONE,
+            is_saved=True,
+            processed_image="wardrobe_items_ai/processed/other_proc.png",
+            fal_cdn_url="https://v3b.fal.media/files/other.png",
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+    def test_both_endpoints_return_200_and_all_items(self, mock_upload):
+        for path in ["/api/v1/wardrobe-items-ai/items/", "/api/v1/wardrobe/items/"]:
+            resp = self.client.get(path)
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            data = resp.json()
+            self.assertEqual(len(data), 5)
+            # Ensure items belong only to self.user
+            item_ids = [it["id"] for it in data]
+            for it_id in item_ids:
+                self.assertIn(it_id, [x.id for x in self.items])
+
+            # Check saved vs unsaved representation
+            saved_items = [it for it in data if it["analysis"]["is_saved"] is True]
+            unsaved_items = [it for it in data if it["analysis"]["is_saved"] is False]
+            self.assertEqual(len(saved_items), 2)
+            self.assertEqual(len(unsaved_items), 3)
+
+            for s in saved_items:
+                self.assertTrue(s["analysis"]["is_saved"])
+                self.assertIsNotNone(s["analysis"]["processed_image"])
+                self.assertTrue(bool(s["analysis"]["display_url"]))
+
+            for u in unsaved_items:
+                self.assertFalse(u["analysis"]["is_saved"])
+                self.assertIsNone(u["analysis"]["processed_image"])
+                self.assertTrue(bool(u["analysis"]["display_url"]))
+
+    def test_category_filtering_works_on_both_endpoints(self, mock_upload):
+        for path in ["/api/v1/wardrobe-items-ai/items/", "/api/v1/wardrobe/items/"]:
+            resp = self.client.get(f"{path}?category=Bag")
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            data = resp.json()
+            self.assertEqual(len(data), 2)  # indices 1 and 3 are Bags
+            for it in data:
+                self.assertEqual(it["category"]["name"], "Bag")
+
+    def test_no_n_plus_one_queries(self, mock_upload):
+        # With select_related("category", "analysis"), fetching 5 items executes exactly 1 query
+        for path in ["/api/v1/wardrobe-items-ai/items/", "/api/v1/wardrobe/items/"]:
+            with self.assertNumQueries(1):
+                resp = self.client.get(path)
+                self.assertEqual(resp.status_code, status.HTTP_200_OK)
+                self.assertEqual(len(resp.json()), 5)
+
+    def test_wardrobe_detail_and_delete_alias(self, mock_upload):
+        item = self.items[0]
+        # GET detail alias
+        resp = self.client.get(f"/api/v1/wardrobe/items/{item.id}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["id"], item.id)
+
+        # Other user cannot access detail
+        self.client.force_authenticate(user=self.other_user)
+        resp_other = self.client.get(f"/api/v1/wardrobe/items/{item.id}/")
+        self.assertEqual(resp_other.status_code, status.HTTP_404_NOT_FOUND)
+
+        # DELETE alias
+        self.client.force_authenticate(user=self.user)
+        resp_del = self.client.delete(f"/api/v1/wardrobe/items/{item.id}/")
+        self.assertEqual(resp_del.status_code, status.HTTP_200_OK)
+        self.assertFalse(WardrobeItem.objects.filter(id=item.id).exists())
+
+    def test_wardrobe_save_alias(self, mock_upload):
+        unsaved_item = self.items[2]  # is_saved=False
+        mock_resp = MagicMock()
+        mock_resp.content = VALID_PNG_BYTES
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp):
+            resp = self.client.post(f"/api/v1/wardrobe/items/{unsaved_item.id}/save/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data["analysis"]["is_saved"])
+
+
 
 
 

@@ -83,7 +83,7 @@ class WardrobeItemListCreateView(generics.ListCreateAPIView):
         return WardrobeItemSerializer
 
     def get_queryset(self):
-        qs = WardrobeItem.objects.filter(user=self.request.user)
+        qs = WardrobeItem.objects.filter(user=self.request.user).select_related("category", "analysis")
 
         category_param = self.request.query_params.get("category")
         season_param = self.request.query_params.get("season")
@@ -129,7 +129,7 @@ class WardrobeItemDetailView(generics.RetrieveDestroyAPIView):
     serializer_class = WardrobeItemSerializer
 
     def get_queryset(self):
-        return WardrobeItem.objects.filter(user=self.request.user)
+        return WardrobeItem.objects.filter(user=self.request.user).select_related("category", "analysis")
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
