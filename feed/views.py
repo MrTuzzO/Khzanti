@@ -194,17 +194,35 @@ class FriendsStyleFeedView(APIView):
     pagination_class = StandardPagination
 
     @extend_schema(
-        parameters=[],
+        parameters=[
+            OpenApiParameter(
+                name="date",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Optional date filter ('today', 'yesterday', or 'YYYY-MM-DD'). Omit to retrieve all available dates.",
+            ),
+            OpenApiParameter(
+                name="style_type",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Filter by type: 'all' (default), 'outfit', or 'post'.",
+            ),
+        ],
         responses={200: FriendsStyleItemSerializer(many=True)},
         summary="Friends Style Feed",
-        description="Returns today's public outfits and posts of connected friends in a single unified feed.",
+        description="Returns public outfits and posts of connected friends in a unified feed across all dates (or filtered by optional date).",
     )
     def get(self, request, *args, **kwargs):
-        # Default to today
-        target_date = timezone.now().date()
+        # Optional date filter: omit or None means all available dates
+        target_date = None
         date_param = request.query_params.get("date")
         if date_param:
-            if date_param.strip().lower() == "yesterday":
+            date_str = date_param.strip().lower()
+            if date_str == "today":
+                target_date = timezone.now().date()
+            elif date_str == "yesterday":
                 target_date = timezone.now().date() - timedelta(days=1)
             else:
                 try:
@@ -227,31 +245,46 @@ class FriendsStyleFeedView(APIView):
 
         # 4. Fetch Outfits
         if style_type in ("all", "outfit"):
-            daily_selections = DailyOutfitSelection.objects.filter(
-                user_id__in=friend_ids,
-                date=target_date,
-            ).select_related("outfit_job")
-            daily_job_ids = {ds.outfit_job_id for ds in daily_selections if ds.outfit_job_id}
-
-            outfit_date_q = (
-                Q(date=target_date)
-                | Q(created_at__date=target_date)
-                | Q(updated_at__date=target_date)
-                | Q(outfit_job__scheduled_date=target_date)
-                | Q(outfit_job__created_at__date=target_date)
-            )
-            if daily_job_ids:
-                outfit_date_q |= Q(outfit_job_id__in=daily_job_ids)
-
-            saved_outfits_qs = with_rating_aggregates(
-                SavedOutfit.objects.filter(
+            if target_date is not None:
+                daily_selections = DailyOutfitSelection.objects.filter(
                     user_id__in=friend_ids,
-                    is_shared=True,
+                    date=target_date,
+                ).select_related("outfit_job")
+                daily_job_ids = {ds.outfit_job_id for ds in daily_selections if ds.outfit_job_id}
+
+                outfit_date_q = (
+                    Q(date=target_date)
+                    | Q(created_at__date=target_date)
+                    | Q(updated_at__date=target_date)
+                    | Q(outfit_job__scheduled_date=target_date)
+                    | Q(outfit_job__created_at__date=target_date)
                 )
-                .filter(outfit_date_q)
-                .select_related("user", "outfit_job", "outfit_job__avatar")
-                .distinct()
-            )
+                if daily_job_ids:
+                    outfit_date_q |= Q(outfit_job_id__in=daily_job_ids)
+
+                saved_outfits_qs = with_rating_aggregates(
+                    SavedOutfit.objects.filter(
+                        user_id__in=friend_ids,
+                        is_shared=True,
+                    )
+                    .filter(outfit_date_q)
+                    .select_related("user", "outfit_job", "outfit_job__avatar")
+                    .distinct()
+                )
+            else:
+                daily_selections = DailyOutfitSelection.objects.filter(
+                    user_id__in=friend_ids,
+                ).select_related("outfit_job")
+                daily_job_ids = {ds.outfit_job_id for ds in daily_selections if ds.outfit_job_id}
+
+                saved_outfits_qs = with_rating_aggregates(
+                    SavedOutfit.objects.filter(
+                        user_id__in=friend_ids,
+                        is_shared=True,
+                    )
+                    .select_related("user", "outfit_job", "outfit_job__avatar")
+                    .distinct()
+                )
             all_outfits = list(saved_outfits_qs)
 
             # Check viewer's saved jobs
@@ -338,6 +371,16 @@ class FriendsStyleFeedView(APIView):
                     "note": job.reasoning_note or "",
                 } if job else None
 
+                outfit_item_date = (
+                    target_date
+                    if target_date is not None
+                    else (
+                        outfit.date
+                        or (job.scheduled_date if job and job.scheduled_date else None)
+                        or (outfit.created_at.date() if outfit.created_at else timezone.now().date())
+                    )
+                )
+
                 combined_items.append({
                     "_sort_time": outfit.updated_at or outfit.created_at,
                     "style_type": "Outfit",
@@ -352,7 +395,7 @@ class FriendsStyleFeedView(APIView):
                     "original_image": original_img_url,
                     "images": images_list,
                     "caption": None,
-                    "date": target_date,
+                    "date": outfit_item_date,
                     "created_at": outfit.created_at,
                     "is_saved_by_viewer": (job.id in viewer_saved_jobs) if job else False,
                     "is_shared": True,
@@ -364,12 +407,15 @@ class FriendsStyleFeedView(APIView):
 
         # 5. Fetch Posts
         if style_type in ("all", "post"):
+            posts_filter = {
+                "user_id__in": friend_ids,
+                "privacy": "public",
+            }
+            if target_date is not None:
+                posts_filter["created_at__date"] = target_date
+
             posts_qs = (
-                Post.objects.filter(
-                    user_id__in=friend_ids,
-                    privacy="public",
-                    created_at__date=target_date,
-                )
+                Post.objects.filter(**posts_filter)
                 .annotate(
                     _ratings_count=Count("ratings", distinct=True),
                     color_harmony__avg=Avg("ratings__color_harmony"),
@@ -379,6 +425,7 @@ class FriendsStyleFeedView(APIView):
                 )
                 .select_related("user")
                 .prefetch_related("images")
+                .distinct()
             )
             posts_list = list(posts_qs)
             post_ids = [p.id for p in posts_list]
@@ -433,6 +480,12 @@ class FriendsStyleFeedView(APIView):
                     "user_rating": user_rating_dict,
                 }
 
+                post_item_date = (
+                    target_date
+                    if target_date is not None
+                    else (post.created_at.date() if post.created_at else timezone.now().date())
+                )
+
                 combined_items.append({
                     "_sort_time": post.created_at,
                     "style_type": "Post",
@@ -447,7 +500,7 @@ class FriendsStyleFeedView(APIView):
                     "original_image": None,
                     "images": post_images,
                     "caption": post.caption or "",
-                    "date": target_date,
+                    "date": post_item_date,
                     "created_at": post.created_at,
                     "is_saved_by_viewer": None,
                     "is_shared": True,
@@ -458,7 +511,10 @@ class FriendsStyleFeedView(APIView):
                 })
 
         # 6. Sort combined results by activity timestamp descending
-        combined_items.sort(key=lambda x: x["_sort_time"], reverse=True)
+        combined_items.sort(
+            key=lambda x: (x["_sort_time"], x["style_type"], x["id"]),
+            reverse=True,
+        )
         for item in combined_items:
             item.pop("_sort_time", None)
 

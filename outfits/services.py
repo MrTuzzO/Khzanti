@@ -250,6 +250,61 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
             "- NEVER place a photorealistic garment or real photographic texture onto a cartoon avatar."
         )
 
+    # Categorize selected items for targeted partial vs full-body clothing replacement instructions
+    has_full_body = False
+    has_top = False
+    has_bottom = False
+    has_outerwear = False
+
+    for item in items:
+        cat_name = (getattr(item.category, "name", "") or "").lower()
+        analysis = getattr(item, "analysis", None)
+        desc = (getattr(analysis, "description", "") or "").lower()
+        text = f"{cat_name} {desc}"
+
+        full_body_kws = ["dress", "gown", "abaya", "jumpsuit", "romper", "saree", "kaftan", "frock"]
+        if any(kw in text for kw in full_body_kws):
+            has_full_body = True
+        elif any(kw in text for kw in ["pant", "trouser", "jean", "skirt", "short", "legging", "bottom"]):
+            has_bottom = True
+        elif any(kw in text for kw in ["top", "shirt", "blouse", "sweater", "hoodie", "tee"]):
+            has_top = True
+        elif any(kw in text for kw in ["jacket", "coat", "blazer", "cardigan", "vest", "outerwear"]):
+            has_outerwear = True
+
+    clothing_replacement_rules = []
+    if has_full_body:
+        clothing_replacement_rules.append(
+            "- FULL-BODY GARMENT (GOWN / DRESS / ABAYA): Replace the avatar's entire existing outfit with the selected gown/dress. "
+            "The gown/dress must be worn as a standalone continuous garment. Do NOT add pants, trousers, or leggings underneath the gown. "
+            "Do NOT add an unselected vest, jacket, or top over or under the gown."
+        )
+    else:
+        if has_top and not has_bottom:
+            clothing_replacement_rules.append(
+                "- TOP-ONLY SELECTION: Replace only the avatar's upper-body clothing with the selected top. "
+                "Retain appropriate existing lower-body clothing from the avatar. Do NOT add unselected outerwear or vests."
+            )
+        elif has_bottom and not has_top:
+            clothing_replacement_rules.append(
+                "- BOTTOM-ONLY SELECTION: Replace only the avatar's lower-body clothing with the selected bottom. "
+                "Retain appropriate existing upper-body clothing from the avatar. Do NOT add unselected outerwear or vests."
+            )
+        elif has_top and has_bottom:
+            clothing_replacement_rules.append(
+                "- TWO-PIECE OUTFIT: Dress the avatar in the selected top and bottom. "
+                "Do NOT add an unselected third garment layer (such as a vest, jacket, or cardigan) unless explicitly selected."
+            )
+        else:
+            clothing_replacement_rules.append(
+                "- ACCESSORY-ONLY SELECTION: Preserve the avatar's existing outfit and apply the selected accessory naturally."
+            )
+
+    if not has_outerwear:
+        clothing_replacement_rules.append(
+            "- NO UNSELECTED OUTERWEAR / VEST: Do NOT introduce any vest, waistcoat, jacket, blazer, or coat since none was selected."
+        )
+
     prompt_parts = [
         "MANDATORY EXECUTION DIRECTIVE — ONE-SHOT COHESIVE VIRTUAL TRY-ON & GARMENT RECONSTRUCTION:",
         "",
@@ -257,11 +312,18 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         "- The avatar in Image 1 is the AUTHORITATIVE BASE SCENE that dictates the entire visual world of the final output.",
         "- Avatar controls: person identity, face, facial structure, expression, apparent gender, skin appearance, hair, body proportions, anatomy, pose, camera position, camera angle, framing, perspective, environment, background, lighting, exposure, image quality, and overall rendering style.",
         "- STRICT PRESERVATION: Do NOT repaint, restyle, regenerate, beautify, or alter the avatar. Adapt the clothing to the person — NEVER alter the person to fit the clothing.",
+        "- CLOTHING REPLACEMENT VS RETENTION (PARTIAL & FULL SELECTIONS):",
+    ] + clothing_replacement_rules + [
         "- ACCESSORY & EYEWEAR POSITIONING ON AVATAR: When eyewear (glasses/sunglasses), headwear, or facial/body accessories are worn, allow the natural visual placement of the accessory on the avatar (e.g. glasses naturally resting over the eyes and nose bridge) without prohibiting or rejecting placement, while strictly preserving underlying facial identity, facial structure, expression, skin, and hair.",
         "",
         "2. WARDROBE IMAGES ARE AUTHORITATIVE GARMENT REFERENCES (WHAT TO WEAR, NOT HOW TO RENDER):",
         "- The wardrobe images (Image 2, 3, etc.) control ONLY the garment's identity and design specifications:",
         "  * Garment category, garment identity, silhouette, construction, cut, length, proportions, color, fabric pattern, neckline/collar, sleeves, cuffs, buttons, pockets, seams, and distinctive details.",
+        "- PRESERVE EXACT SELECTED CLOTHING (NO INVENTED OR MODIFIED GARMENTS):",
+        "  * Dress the avatar using the exact clothing items selected by the user. Preserve their original visual identity and do not introduce any clothing items that were not selected.",
+        "  * Preserve the selected garments' original design, color, pattern, silhouette, length, neckline, sleeves, and distinctive details.",
+        "  * Avoid redesigning, replacing, or reinterpreting selected garments (a gown must remain a gown; a dress must remain a dress).",
+        "  * Avoid retaining conflicting placeholder clothing from the avatar when it overlaps with a selected garment.",
         "- RECONSTRUCT, DO NOT COPY DEFECTS: A blurry, poorly lit, wrinkled, or flat-lay photographed wardrobe reference must become a clean, realistic, physically fitted version of THAT EXACT SAME GARMENT on the avatar.",
         "- STRICTLY DISCARD all wardrobe image source artifacts: DO NOT copy wardrobe background, lighting, shadows, flat-lay folds/wrinkles, camera perspective, noise, distortion, or cutout edges.",
         "- STRICT GARMENT FIDELITY (NO SUBSTITUTION): Do NOT redesign or substitute garments (dress ≠ shirt + pants; dress ≠ coat + pants; skirt ≠ trousers; saree ≠ generic dress; hijab ≠ loose hair; long garment ≠ short garment). Preserve the essential identity and construction of the supplied garment.",
@@ -304,6 +366,7 @@ def build_try_on_prompt(avatar: Avatar, items: list) -> str:
         "- CRITICAL TEST: A human observer looking at the final image must perceive that the person was naturally photographed or created wearing the supplied outfit.",
         "- It must NEVER look like someone took a wardrobe product image and photoshopped it onto the person.",
         "- Include ONLY the specified wardrobe items. Do NOT invent unrequested accessories, extra layers, or unselected garments.",
+        "- Do NOT add pants or leggings under a gown or dress, and do NOT add an unselected vest or jacket.",
         "",
         "6. PRIORITY HIERARCHY WHEN REFERENCES CONFLICT:",
         "   1. Avatar's visual world: identity, anatomy, pose, lighting, camera, perspective, and background environment (Authoritative)",
@@ -340,28 +403,40 @@ async def submit_try_on_job_async(job: OutfitJob) -> OutfitJob:
             pass
 
     image_urls = [avatar_image_url]
+    valid_items = []
 
     for item in items:
         analysis = getattr(item, "analysis", None)
-        if not analysis:
-            continue
-        # Ensure accessories are normalized and saved to storage before try-on submission
-        if not analysis.is_saved and analysis.fal_cdn_url:
-            cat_name = getattr(item.category, "name", "") if item.category else ""
-            desc = getattr(analysis, "description", "") or ""
-            if classify_accessory_subtype(cat_name, desc) is not None:
-                try:
-                    from wardrobe_items_ai.services import save_wardrobe_item_to_cloudinary
-                    await sync_to_async(save_wardrobe_item_to_cloudinary)(analysis)
-                    await sync_to_async(analysis.refresh_from_db)()
-                except Exception as save_err:
-                    logger.warning("Accessory normalization before try-on failed for item %s: %s", item.id, save_err)
+        item_url = ""
+        if analysis:
+            # Ensure accessories are normalized and saved to storage before try-on submission
+            if not analysis.is_saved and analysis.fal_cdn_url:
+                cat_name = getattr(item.category, "name", "") if item.category else ""
+                desc = getattr(analysis, "description", "") or ""
+                if classify_accessory_subtype(cat_name, desc) is not None:
+                    try:
+                        from wardrobe_items_ai.services import save_wardrobe_item_to_cloudinary
+                        await sync_to_async(save_wardrobe_item_to_cloudinary)(analysis)
+                        await sync_to_async(analysis.refresh_from_db)()
+                    except Exception as save_err:
+                        logger.warning("Accessory normalization before try-on failed for item %s: %s", item.id, save_err)
 
-        item_url = analysis.display_url
+            item_url = analysis.display_url
+
+        # Fallback to original wardrobe image if processed/cdn url is missing
+        if not item_url and item.image:
+            try:
+                item_url = item.image.url
+            except Exception:
+                pass
+
         if item_url:
             image_urls.append(item_url)
+            valid_items.append(item)
+        else:
+            logger.warning("[OUTFITS TRY-ON] Item %s has no usable image URL. Skipping.", item.id)
 
-    prompt = build_try_on_prompt(avatar_obj, items)
+    prompt = build_try_on_prompt(avatar_obj, valid_items)
 
     base_url = (getattr(settings, "WEBHOOK_BASE_URL", "") or "").strip().rstrip("/")
     webhook_url = f"{base_url}/api/v1/outfits/try-on/webhook/" if (base_url and base_url.startswith(("http://", "https://"))) else None

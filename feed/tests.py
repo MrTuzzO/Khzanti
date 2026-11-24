@@ -328,6 +328,92 @@ class FriendsStyleAPITestCase(APITestCase):
         self.assertEqual(bob_item["outfit_image"], "https://v3b.fal.media/bob_fit.png")
         self.assertEqual(bob_item["images"], ["https://v3b.fal.media/bob_fit.png"])
 
+    def test_friends_style_feed_shows_all_available_dates_by_default(self):
+        self.client.force_authenticate(user=self.user)
+
+        # Alice has an outfit from 3 days ago
+        three_days_ago = self.today - timedelta(days=3)
+        job_alice_old = OutfitJob.objects.create(
+            user=self.friend1,
+            avatar=self.avatar_alice,
+            status=JobStatus.DONE,
+            scheduled_date=three_days_ago,
+            fal_cdn_url="https://v3b.fal.media/alice_old.png",
+            reasoning_title="Throwback Outfit",
+        )
+        saved_alice_old = SavedOutfit.objects.create(
+            user=self.friend1,
+            outfit_job=job_alice_old,
+            date=three_days_ago,
+            is_shared=True,
+        )
+
+        # Bob has a post from 5 days ago
+        five_days_ago = self.today - timedelta(days=5)
+        post_bob_old = Post.objects.create(
+            user=self.friend2,
+            caption="Post from five days ago",
+            privacy="public",
+        )
+        # Update post_bob_old created_at to 5 days ago
+        Post.objects.filter(id=post_bob_old.id).update(
+            created_at=timezone.now() - timedelta(days=5)
+        )
+        post_bob_old.refresh_from_db()
+
+        # Query feed without date parameter
+        res = self.client.get("/api/v1/feed/friends-style/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        results = res.data.get("results", [])
+        self.assertGreaterEqual(len(results), 5)  # setup items + 2 older items
+
+        # Check that older outfit is present
+        outfit_ids = [item["id"] for item in results if item["style_type"] == "Outfit"]
+        self.assertIn(saved_alice_old.id, outfit_ids)
+        alice_old_item = next(item for item in results if item["style_type"] == "Outfit" and item["id"] == saved_alice_old.id)
+        self.assertEqual(alice_old_item["date"], three_days_ago.isoformat())
+
+        # Check that older post is present
+        post_ids = [item["id"] for item in results if item["style_type"] == "Post"]
+        self.assertIn(post_bob_old.id, post_ids)
+        bob_old_item = next(item for item in results if item["style_type"] == "Post" and item["id"] == post_bob_old.id)
+        self.assertEqual(bob_old_item["date"], five_days_ago.isoformat())
+
+        # Check ordering is reverse chronological
+        timestamps = [item["created_at"] for item in results]
+        self.assertEqual(timestamps, sorted(timestamps, reverse=True))
+
+    def test_friends_style_pagination_across_dates_no_duplicates(self):
+        self.client.force_authenticate(user=self.user)
+
+        # Create 25 posts across various past days
+        for i in range(1, 26):
+            p = Post.objects.create(
+                user=self.friend1,
+                caption=f"Historical post #{i}",
+                privacy="public",
+            )
+            past_time = timezone.now() - timedelta(days=i, minutes=i)
+            Post.objects.filter(id=p.id).update(created_at=past_time)
+
+        # Page 1
+        res_page1 = self.client.get("/api/v1/feed/friends-style/?page=1")
+        self.assertEqual(res_page1.status_code, status.HTTP_200_OK)
+        results_p1 = res_page1.data.get("results", [])
+        self.assertEqual(len(results_p1), 20)  # StandardPagination page size is 20
+
+        # Page 2
+        res_page2 = self.client.get("/api/v1/feed/friends-style/?page=2")
+        self.assertEqual(res_page2.status_code, status.HTTP_200_OK)
+        results_p2 = res_page2.data.get("results", [])
+        self.assertGreater(len(results_p2), 0)
+
+        # Ensure no duplicates across pages
+        p1_keys = {(item["style_type"], item["id"]) for item in results_p1}
+        p2_keys = {(item["style_type"], item["id"]) for item in results_p2}
+        self.assertTrue(p1_keys.isdisjoint(p2_keys), "Found duplicate items across paginated pages")
+
 
 class SaveFriendOutfitAPITestCase(APITestCase):
     def setUp(self):

@@ -283,6 +283,82 @@ class TryOnPromptBuilderTestCase(APITestCase):
         self.assertIn("ACCESSORIES & REALISTIC SCALE: All accessories (bags, glasses, watches, jewelry, belts, hats, scarves) must maintain realistic, life-sized proportions relative to the human body", prompt)
         self.assertIn("A watch must remain wrist-sized, glasses must fit the face, a handbag must have realistic dimensions, and jewelry must not be enlarged", prompt)
 
+    def test_gown_only_selection_replaces_outfit_without_pants_or_vest(self):
+        cat_gown, _ = Category.objects.get_or_create(name="Gown")
+        item_gown = WardrobeItem.objects.create(user=self.user, category=cat_gown, image=self.dummy_img)
+        ItemAnalysis.objects.create(
+            wardrobe_item=item_gown,
+            status=ItemAnalysis.JobStatus.DONE,
+            color="emerald green",
+            description="silk evening gown with floor length silhouette",
+        )
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_gown])
+
+        # Core instructions
+        self.assertIn("Dress the avatar using the exact clothing items selected by the user", prompt)
+        self.assertIn("Preserve their original visual identity and do not introduce any clothing items that were not selected", prompt)
+
+        # Gown replacement rules
+        self.assertIn("FULL-BODY GARMENT (GOWN / DRESS / ABAYA): Replace the avatar's entire existing outfit with the selected gown/dress", prompt)
+        self.assertIn("Do NOT add pants, trousers, or leggings underneath the gown", prompt)
+        self.assertIn("Do NOT add an unselected vest, jacket, or top over or under the gown", prompt)
+        self.assertIn("NO UNSELECTED OUTERWEAR / VEST: Do NOT introduce any vest, waistcoat, jacket, blazer, or coat since none was selected", prompt)
+
+    def test_top_only_selection_retains_existing_lower_body(self):
+        prompt = build_try_on_prompt(self.avatar_real, [self.item_top])
+
+        self.assertIn("TOP-ONLY SELECTION: Replace only the avatar's upper-body clothing with the selected top", prompt)
+        self.assertIn("Retain appropriate existing lower-body clothing from the avatar", prompt)
+        self.assertIn("Do NOT add unselected outerwear or vests", prompt)
+
+    def test_pants_only_selection_retains_existing_upper_body(self):
+        prompt = build_try_on_prompt(self.avatar_real, [self.item_bottom])
+
+        self.assertIn("BOTTOM-ONLY SELECTION: Replace only the avatar's lower-body clothing with the selected bottom", prompt)
+        self.assertIn("Retain appropriate existing upper-body clothing from the avatar", prompt)
+        self.assertIn("Do NOT add unselected outerwear or vests", prompt)
+
+    def test_watch_only_selection_preserves_existing_outfit(self):
+        cat_acc, _ = Category.objects.get_or_create(name="Accessories")
+        item_watch = WardrobeItem.objects.create(user=self.user, category=cat_acc, image=self.dummy_img)
+        ItemAnalysis.objects.create(
+            wardrobe_item=item_watch,
+            status=ItemAnalysis.JobStatus.DONE,
+            color="gold",
+            description="luxury wristwatch with leather strap",
+        )
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_watch])
+
+        self.assertIn("ACCESSORY-ONLY SELECTION: Preserve the avatar's existing outfit and apply the selected accessory naturally", prompt)
+        self.assertIn("This is a wrist accessory", prompt)
+
+    def test_gown_and_shoes_selection_preserves_both_without_extra_garments(self):
+        cat_gown, _ = Category.objects.get_or_create(name="Gown")
+        cat_shoes, _ = Category.objects.get_or_create(name="Shoes")
+
+        item_gown = WardrobeItem.objects.create(user=self.user, category=cat_gown, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_gown, status=ItemAnalysis.JobStatus.DONE, color="red", description="evening gown")
+
+        item_shoes = WardrobeItem.objects.create(user=self.user, category=cat_shoes, image=self.dummy_img)
+        ItemAnalysis.objects.create(wardrobe_item=item_shoes, status=ItemAnalysis.JobStatus.DONE, color="black", description="high heels")
+
+        prompt = build_try_on_prompt(self.avatar_real, [item_gown, item_shoes])
+
+        self.assertIn("FULL-BODY GARMENT (GOWN / DRESS / ABAYA): Replace the avatar's entire existing outfit with the selected gown/dress", prompt)
+        self.assertIn("Do NOT add pants, trousers, or leggings underneath the gown", prompt)
+        self.assertIn("NO UNSELECTED OUTERWEAR / VEST", prompt)
+        self.assertIn("Reference Gown", prompt)
+        self.assertIn("Reference Shoes", prompt)
+
+    def test_normal_multi_item_outfit_layering_intact(self):
+        prompt = build_try_on_prompt(self.avatar_real, [self.item_top, self.item_bottom])
+
+        self.assertIn("TWO-PIECE OUTFIT: Dress the avatar in the selected top and bottom", prompt)
+        self.assertIn("MULTI-GARMENT PHYSICAL LAYERING", prompt)
+        self.assertIn("shirts tucked into/under pants or jackets", prompt)
+
 
 @patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
 class TryOnSaveAPITestCase(APITestCase):
