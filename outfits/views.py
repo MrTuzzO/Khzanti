@@ -609,7 +609,21 @@ class RateSavedOutfitView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _get_ratable_outfit(self, request, pk):
-        outfit = get_object_or_404(SavedOutfit, pk=pk, is_shared=True)
+        # 1. First attempt to resolve by SavedOutfit.id (is_shared=True)
+        outfit = SavedOutfit.objects.filter(pk=pk, is_shared=True).first()
+
+        # 2. If not found, attempt to resolve by OutfitJob.id (outfit_job_id)
+        if not outfit:
+            outfit = (
+                SavedOutfit.objects.filter(outfit_job_id=pk, is_shared=True)
+                .order_by("-updated_at", "-id")
+                .first()
+            )
+
+        if not outfit:
+            raise Http404("No SavedOutfit matches the given query.")
+
+        # 3. Preserve restriction: cannot rate own outfit
         if outfit.user_id == request.user.id:
             raise ValidationError({"detail": "You cannot rate your own outfit."})
         return outfit

@@ -3263,6 +3263,124 @@ class MultiUserOutfitRatingFlowTestCase(APITestCase):
         )
         self.assertEqual(resp_under.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_rate_outfit_using_outfit_job_id_fallback(self):
+        """
+        When mobile sends outfit_job.id (outfit_id from Friends Style feed) instead of saved_outfit.id,
+        it resolves successfully to the shared SavedOutfit.
+        """
+        # Create a dedicated job and saved outfit where IDs are guaranteed to differ
+        dummy_job = OutfitJob.objects.create(
+            user=self.owner,
+            avatar=self.avatar,
+            status=JobStatus.DONE,
+            result_image="outfits/result/dummy.png",
+        )
+        test_job = OutfitJob.objects.create(
+            user=self.owner,
+            avatar=self.avatar,
+            status=JobStatus.DONE,
+            result_image="outfits/result/test_job.png",
+        )
+        test_saved = SavedOutfit.objects.create(
+            user=self.owner,
+            outfit_job=test_job,
+            date=timezone.now().date(),
+            is_shared=True,
+        )
+
+        # Ensure IDs differ
+        self.assertNotEqual(test_job.id, test_saved.id)
+
+        # User A has NOT saved this outfit
+        self.assertFalse(SavedOutfit.objects.filter(user=self.user_a, outfit_job=test_job).exists())
+
+        self.client.force_authenticate(user=self.user_a)
+        rate_job_url = f"/api/v1/outfits/saved/{test_job.id}/rate/"
+
+        resp = self.client.post(
+            rate_job_url,
+            {"color_harmony": 9, "trendy": 8, "overall_matching": 9, "accessories": 7},
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data["color_harmony"], 9)
+
+        # Rating record is properly associated with the friend's SavedOutfit
+        rating = OutfitRating.objects.get(saved_outfit=test_saved, rater=self.user_a)
+        self.assertEqual(rating.color_harmony, 9)
+
+        # Updating rating via OutfitJob ID works
+        resp_update = self.client.post(
+            rate_job_url,
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.assertEqual(resp_update.status_code, status.HTTP_200_OK)
+        rating.refresh_from_db()
+        self.assertEqual(rating.color_harmony, 10)
+
+    def test_rate_own_outfit_prevented_with_both_ids(self):
+        """Owner cannot rate their own outfit, whether using SavedOutfit.id or OutfitJob.id."""
+        self.client.force_authenticate(user=self.owner)
+
+        # Via SavedOutfit.id
+        resp_saved = self.client.post(
+            f"/api/v1/outfits/saved/{self.outfit_x.id}/rate/",
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.assertEqual(resp_saved.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("You cannot rate your own outfit", resp_saved.data.get("detail", ""))
+
+        # Via OutfitJob.id
+        resp_job = self.client.post(
+            f"/api/v1/outfits/saved/{self.job_x.id}/rate/",
+            {"color_harmony": 10, "trendy": 10, "overall_matching": 10, "accessories": 10},
+        )
+        self.assertEqual(resp_job.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("You cannot rate your own outfit", resp_job.data.get("detail", ""))
+
+    def test_rate_unshared_outfit_rejected_with_both_ids(self):
+        """Unshared / private outfits cannot be rated using either SavedOutfit.id or OutfitJob.id."""
+        unshared_job = OutfitJob.objects.create(
+            user=self.owner,
+            avatar=self.avatar,
+            status=JobStatus.DONE,
+            result_image="outfits/result/unshared.png",
+        )
+        unshared_saved = SavedOutfit.objects.create(
+            user=self.owner,
+            outfit_job=unshared_job,
+            date=timezone.now().date(),
+            is_shared=False,
+        )
+
+        self.client.force_authenticate(user=self.user_a)
+
+        # Via SavedOutfit.id -> 404
+        resp_saved = self.client.post(
+            f"/api/v1/outfits/saved/{unshared_saved.id}/rate/",
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+        self.assertEqual(resp_saved.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Via OutfitJob.id -> 404
+        resp_job = self.client.post(
+            f"/api/v1/outfits/saved/{unshared_job.id}/rate/",
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+        self.assertEqual(resp_job.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_delete_rating_via_outfit_job_id(self):
+        """Deleting a rating via OutfitJob ID works seamlessly."""
+        self.client.force_authenticate(user=self.user_a)
+        self.client.post(
+            f"/api/v1/outfits/saved/{self.job_x.id}/rate/",
+            {"color_harmony": 8, "trendy": 8, "overall_matching": 8, "accessories": 8},
+        )
+        self.assertEqual(OutfitRating.objects.filter(saved_outfit=self.outfit_x, rater=self.user_a).count(), 1)
+
+        resp_del = self.client.delete(f"/api/v1/outfits/saved/{self.job_x.id}/rate/")
+        self.assertEqual(resp_del.status_code, status.HTTP_200_OK)
+        self.assertEqual(OutfitRating.objects.filter(saved_outfit=self.outfit_x, rater=self.user_a).count(), 0)
+
 
 @patch("cloudinary.uploader.upload", return_value=MOCK_CLOUDINARY_RESPONSE)
 @patch("outfits.services.submit_try_on_job")
