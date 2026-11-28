@@ -3,6 +3,7 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
+from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from core.ckeditor_uploads import upload_file as ckeditor_upload_file
 
@@ -13,6 +14,7 @@ def health_check(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('healthz/', health_check, name='health-check'),
+    path('privacy-policy/', TemplateView.as_view(template_name='privacy_policy.html'), name='privacy-policy'),
     path('ckeditor5/image_upload/', ckeditor_upload_file, name='ck_editor_5_upload_file'),
     path('api/v1/auth/', include('accounts.urls')),
     path('api/v1/', include('core.urls')),
