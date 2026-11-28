@@ -10,13 +10,17 @@ from rest_framework.views import APIView
 
 from accounts.models import User
 from core.pagination import StandardPagination
-from .models import Follow
-from .serializers import PublicUserSerializer
+from .models import Block, Follow, UserReport
+from .serializers import PublicUserSerializer, ReportSerializer
+from .utils import blocked_user_ids
 
 
 def annotated_users(viewer):
-    """Base queryset for User cards: adds follow counts + whether `viewer` follows them."""
-    return User.objects.filter(is_active=True).annotate(
+    """Base queryset for User cards: adds follow counts + whether `viewer` follows them.
+
+    Users blocked by (or blocking) the viewer are excluded.
+    """
+    return User.objects.filter(is_active=True).exclude(pk__in=blocked_user_ids(viewer)).annotate(
         followers_count=Count("followers", distinct=True),
         following_count=Count("following", distinct=True),
         shared_outfits_count=Count(
@@ -120,3 +124,78 @@ class FollowingListView(generics.ListAPIView):
         target = get_object_or_404(User, username=self.kwargs["username"])
         following_ids = Follow.objects.filter(follower=target).values("following_id")
         return annotated_users(self.request.user).filter(pk__in=following_ids).order_by("username")
+
+
+class BlockActionView(APIView):
+    """POST /social/users/<username>/block/ to block, DELETE to unblock."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT})
+    def post(self, request, username):
+        target = get_object_or_404(User, username=username, is_active=True)
+        if target == request.user:
+            raise ValidationError({"detail": "You cannot block yourself."})
+
+        _, created = Block.objects.get_or_create(blocker=request.user, blocked=target)
+        # Blocking severs follow relationships in both directions.
+        Follow.objects.filter(
+            Q(follower=request.user, following=target) | Q(follower=target, following=request.user)
+        ).delete()
+        return Response(
+            {"detail": "User blocked." if created else "User already blocked."},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request, username):
+        target = get_object_or_404(User, username=username)
+        Block.objects.filter(blocker=request.user, blocked=target).delete()
+        return Response({"detail": "User unblocked."}, status=status.HTTP_200_OK)
+
+
+class BlockedUsersListView(generics.ListAPIView):
+    """GET /social/blocked/ - users the current user has blocked."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = PublicUserSerializer
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        blocked_ids = Block.objects.filter(blocker=self.request.user).values("blocked_id")
+        return (
+            User.objects.filter(pk__in=blocked_ids, is_active=True)
+            .annotate(
+                followers_count=Count("followers", distinct=True),
+                following_count=Count("following", distinct=True),
+                shared_outfits_count=Count(
+                    "saved_outfits", filter=Q(saved_outfits__is_shared=True), distinct=True
+                ),
+            )
+            .order_by("username")
+        )
+
+
+class ReportUserView(APIView):
+    """POST /social/users/<username>/report/ {reason, details}"""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=ReportSerializer, responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT})
+    def post(self, request, username):
+        target = get_object_or_404(User, username=username, is_active=True)
+        if target == request.user:
+            raise ValidationError({"detail": "You cannot report yourself."})
+
+        serializer = ReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        _, created = UserReport.objects.update_or_create(
+            reporter=request.user,
+            reported_user=target,
+            defaults=serializer.validated_data,
+        )
+        return Response(
+            {"detail": "Report submitted. Thank you."},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )

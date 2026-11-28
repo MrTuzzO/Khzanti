@@ -4,6 +4,9 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
+from social.models import ReportReason, ReportStatus
+
+
 class Privacy(models.TextChoices):
     PUBLIC = "public", _("Public")
     PRIVATE = "private", _("Private")
@@ -53,6 +56,52 @@ class PostImage(models.Model):
 
     def __str__(self):
         return f"Image for Post {self.post_id}"
+
+
+class PostReport(models.Model):
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="post_reports_made"
+    )
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="reports")
+    reason = models.CharField(max_length=20, choices=ReportReason.choices, default=ReportReason.OTHER)
+    details = models.TextField(blank=True, max_length=1000)
+    status = models.CharField(
+        max_length=20, choices=ReportStatus.choices, default=ReportStatus.PENDING, db_index=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["reporter", "post"], name="unique_post_report"),
+        ]
+
+    def __str__(self):
+        return f"Report on post {self.post_id} by {self.reporter_id}"
+
+
+class OutfitReport(models.Model):
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="outfit_reports_made"
+    )
+    saved_outfit = models.ForeignKey(
+        "outfits.SavedOutfit", on_delete=models.CASCADE, related_name="reports"
+    )
+    reason = models.CharField(max_length=20, choices=ReportReason.choices, default=ReportReason.OTHER)
+    details = models.TextField(blank=True, max_length=1000)
+    status = models.CharField(
+        max_length=20, choices=ReportStatus.choices, default=ReportStatus.PENDING, db_index=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["reporter", "saved_outfit"], name="unique_outfit_report"),
+        ]
+
+    def __str__(self):
+        return f"Report on outfit {self.saved_outfit_id} by {self.reporter_id}"
 
 
 class PostRating(models.Model):

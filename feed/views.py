@@ -16,7 +16,9 @@ from core.pagination import StandardPagination
 from outfits.models import DailyOutfitSelection, JobStatus, OutfitJob, OutfitRating, SavedOutfit
 from outfits.views import with_rating_aggregates
 from social.models import Follow
-from .models import Post, PostImage, PostRating
+from social.serializers import ReportSerializer
+from social.utils import blocked_user_ids
+from .models import OutfitReport, Post, PostImage, PostRating, PostReport
 from .serializers import (
     FriendsStyleItemSerializer,
     PostRatingSerializer,
@@ -33,7 +35,7 @@ class PostViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Post.objects.all()
+        qs = Post.objects.exclude(user_id__in=blocked_user_ids(user))
 
         # Check if filtering by username (for profile view)
         target_username = self.request.query_params.get("username")
@@ -165,6 +167,8 @@ class RatePostView(APIView):
 
         if post.privacy != "public" and post.user != request.user:
             raise ValidationError({"detail": "This post is private."})
+        if post.user_id in blocked_user_ids(request.user):
+            raise Http404
 
         serializer = PostRatingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -183,6 +187,69 @@ class RatePostView(APIView):
         post = get_object_or_404(Post, pk=pk)
         PostRating.objects.filter(post=post, rater=request.user).delete()
         return Response({"detail": "Rating removed."}, status=status.HTTP_200_OK)
+
+
+class ReportPostView(APIView):
+    """POST /feed/posts/<id>/report/ {reason, details}"""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=ReportSerializer, responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT})
+    def post(self, request, pk):
+        post = get_object_or_404(Post, pk=pk)
+        if post.user_id == request.user.id:
+            raise ValidationError({"detail": "You cannot report your own post."})
+        if post.privacy != "public" or post.user_id in blocked_user_ids(request.user):
+            raise Http404
+
+        serializer = ReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        _, created = PostReport.objects.update_or_create(
+            reporter=request.user,
+            post=post,
+            defaults=serializer.validated_data,
+        )
+        return Response(
+            {"detail": "Report submitted. Thank you."},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class ReportOutfitView(APIView):
+    """POST /feed/outfits/<id>/report/ {reason, details}
+
+    <id> is the SavedOutfit id (`saved_outfit_id` in feed items); an OutfitJob id
+    (`outfit_id`) is also accepted and resolved to its shared entry.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=ReportSerializer, responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT})
+    def post(self, request, pk):
+        shared = SavedOutfit.objects.filter(is_shared=True).exclude(
+            user_id__in=blocked_user_ids(request.user)
+        )
+        outfit = shared.filter(pk=pk).first() or shared.filter(outfit_job_id=pk).exclude(
+            user=request.user
+        ).first()
+        if outfit is None:
+            raise Http404("Outfit not found.")
+        if outfit.user_id == request.user.id:
+            raise ValidationError({"detail": "You cannot report your own outfit."})
+
+        serializer = ReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        _, created = OutfitReport.objects.update_or_create(
+            reporter=request.user,
+            saved_outfit=outfit,
+            defaults=serializer.validated_data,
+        )
+        return Response(
+            {"detail": "Report submitted. Thank you."},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 class FriendsStyleFeedView(APIView):
@@ -234,7 +301,9 @@ class FriendsStyleFeedView(APIView):
 
         # 3. Get connected friends
         friend_ids = list(
-            Follow.objects.filter(follower=request.user).values_list("following_id", flat=True)
+            Follow.objects.filter(follower=request.user)
+            .exclude(following_id__in=blocked_user_ids(request.user))
+            .values_list("following_id", flat=True)
         )
         if not friend_ids:
             paginator = self.pagination_class()

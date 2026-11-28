@@ -2,6 +2,13 @@ from rest_framework import serializers
 
 from accounts.models import User
 
+from .models import ReportReason
+
+
+class ReportSerializer(serializers.Serializer):
+    reason = serializers.ChoiceField(choices=ReportReason.choices)
+    details = serializers.CharField(required=False, allow_blank=True, max_length=1000, default="")
+
 
 class PublicUserSerializer(serializers.ModelSerializer):
     """User card for search results / followers / following lists / public profile.
