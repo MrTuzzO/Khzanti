@@ -9,7 +9,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import OTP, PasswordResetToken
+from accounts.models import CustomerProfile, OTP, PasswordResetToken
 from accounts.serializers import RegisterSerializer
 
 User = get_user_model()
@@ -471,3 +471,72 @@ class RegistrationAndAccountSecurityAPITestCase(APITestCase):
             {"refresh": str(refresh)},
         )
         self.assertEqual(resp_refresh.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class DeleteAccountAPITestCase(APITestCase):
+    def setUp(self):
+        self.url = "/api/v1/auth/delete-account/"
+        self.password = "StrongPass123!"
+        self.user = User.objects.create_user(
+            email="delete_me@example.com",
+            name="Delete Me",
+            password=self.password,
+            is_email_verified=True,
+        )
+        CustomerProfile.objects.create(user=self.user, country="US")
+
+    def test_delete_account_requires_authentication(self):
+        resp = self.client.post(self.url, {"password": self.password})
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())
+
+    def test_delete_account_rejects_wrong_password(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.post(self.url, {"password": "WrongPassword!"})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", resp.data)
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())
+
+    def test_delete_account_rejects_missing_password(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.post(self.url, {})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", resp.data)
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())
+
+    def test_delete_account_post_deletes_user_and_revokes_tokens(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+
+        refresh = RefreshToken.for_user(self.user)
+        user_id = self.user.pk
+
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.post(self.url, {"password": self.password})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["detail"], "Your account has been permanently deleted.")
+
+        self.assertFalse(User.objects.filter(pk=user_id).exists())
+        self.assertFalse(CustomerProfile.objects.filter(user_id=user_id).exists())
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=refresh["jti"]).exists())
+
+        # Subsequent login and refresh fail
+        self.client.force_authenticate(user=None)
+        login_resp = self.client.post(
+            "/api/v1/auth/login/",
+            {"email": "delete_me@example.com", "password": self.password},
+        )
+        self.assertEqual(login_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+        refresh_resp = self.client.post(
+            "/api/v1/auth/token/refresh/",
+            {"refresh": str(refresh)},
+        )
+        self.assertEqual(refresh_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_delete_account_http_delete_method_supported(self):
+        user_id = self.user.pk
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.delete(self.url, {"password": self.password}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(User.objects.filter(pk=user_id).exists())

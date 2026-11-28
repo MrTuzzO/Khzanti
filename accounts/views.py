@@ -237,17 +237,27 @@ class ResetPasswordView(APIView):
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(request=DeleteAccountSerializer, responses={200: OpenApiTypes.OBJECT})
-    def post(self, request):
+    def _delete_account(self, request):
         serializer = DeleteAccountSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
-        request.user.delete()
+        user = request.user
+        with transaction.atomic():
+            revoke_user_refresh_tokens(user)
+            user.delete()
 
         return Response(
             {"detail": "Your account has been permanently deleted."},
             status=status.HTTP_200_OK,
         )
+
+    @extend_schema(request=DeleteAccountSerializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request):
+        return self._delete_account(request)
+
+    @extend_schema(request=DeleteAccountSerializer, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request):
+        return self._delete_account(request)
 
 
 class ProfileView(APIView):
